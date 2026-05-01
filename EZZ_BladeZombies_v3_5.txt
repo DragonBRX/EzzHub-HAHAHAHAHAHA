@@ -1,0 +1,571 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
+local StarterGui = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+local Config = {
+    MaxClicks = 50,
+    MaxRemoteCalls = 60
+}
+
+local RecordingData = {
+    SessionInfo = {
+        StartTime = os.time(),
+        PlaceId = game.PlaceId,
+        PlayerName = LocalPlayer.Name,
+        Version = "3.5-BXZ"
+    },
+
+    GameStates = {
+        MainMenu = { Captured = false, ImportantButtons = {}, KeyElements = {} },
+        Lobby    = { Captured = false, Players = {}, MapButtons = {}, DifficultyButtons = {} },
+        InGame   = {
+            Captured    = false,
+            Floor       = 0,
+            ZombiesLeft = 0,
+            IsBossFloor = false,
+            Chest  = { Available = false, TotalOpened = 0, LastReward = "" },
+            Boss   = { Active = false, Name = "", HP = 0, MaxHP = 0 },
+            -- Nomes reais encontrados no diagnóstico:
+            Player = { HP = 0, MaxHP = 0, Money = 0, Gem = 0, Scroll = 0, Blood = 0, Damage = 0 },
+            Weapon = { Name = "", IsAwaken = false },
+            -- Skills disparadas (via remotes reais)
+            Skills = { Swings = 0, Skills = 0, Ultimates = 0, Dashes = 0 }
+        }
+    },
+
+    Interactions = {
+        Clicks = {},
+        RemoteCalls = {},
+        Summary = { TotalClicks = 0, TotalRemotes = 0, UniqueTargets = {} }
+    },
+
+    Timeline = {}
+}
+
+local CurrentState = "DETECTING"
+local DebugUI = nil
+local ClickCount = 0
+local RemoteCount = 0
+local LastFloor = 0
+
+local function Log(msg) print("[EZZ] " .. tostring(msg)) end
+
+local function AddToTimeline(t, d)
+    if #RecordingData.Timeline > 100 then table.remove(RecordingData.Timeline, 1) end
+    table.insert(RecordingData.Timeline, {
+        Time = os.time() - RecordingData.SessionInfo.StartTime,
+        Type = t, Data = d
+    })
+end
+
+local function textContains(str, kw)
+    return tostring(str):upper():find(kw:upper(), 1, true) ~= nil
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- BXZ: STATS DO PLAYER (nomes reais do diagnóstico)
+-- Money, Gem, Scroll, Blood são filhos DIRETOS do LocalPlayer
+-- Damage está nas leaderstats
+-- HP vem do Humanoid
+-- ═══════════════════════════════════════════════════════════
+local function ReadBXZStats()
+    local ig = RecordingData.GameStates.InGame
+
+    -- HP via Humanoid
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            ig.Player.HP    = math.floor(hum.Health)
+            ig.Player.MaxHP = math.floor(hum.MaxHealth)
+        end
+
+        -- Arma: no BXZ é um Model no Character chamado pelo nome da espada
+        -- ex: "Dragon_Slayer[Model]" — pega o Model que não é parte do corpo
+        local bodyParts = {
+            Head=true, Torso=true, ["Left Arm"]=true, ["Right Arm"]=true,
+            ["Left Leg"]=true, ["Right Leg"]=true, HumanoidRootPart=true,
+            Humanoid=true, Animate=true, ["Body Colors"]=true
+        }
+        for _, obj in pairs(char:GetChildren()) do
+            if obj:IsA("Model") and not bodyParts[obj.Name] then
+                ig.Weapon.Name = obj.Name
+                -- Verifica se está awakened pelo ScreenGui "Awake"
+            end
+        end
+    end
+
+    -- Moedas: filhos diretos do LocalPlayer
+    local money  = LocalPlayer:FindFirstChild("Money")
+    local gem    = LocalPlayer:FindFirstChild("Gem")
+    local scroll = LocalPlayer:FindFirstChild("Scroll")
+    local blood  = LocalPlayer:FindFirstChild("Blood")
+    if money  then ig.Player.Money  = money.Value  end
+    if gem    then ig.Player.Gem    = gem.Value    end
+    if scroll then ig.Player.Scroll = scroll.Value end
+    if blood  then ig.Player.Blood  = blood.Value  end
+
+    -- Damage nas leaderstats
+    local ls = LocalPlayer:FindFirstChild("leaderstats")
+    if ls then
+        local dmg = ls:FindFirstChild("Damage")
+        if dmg then ig.Player.Damage = dmg.Value end
+    end
+
+    -- Awaken: verifica se o ScreenGui "Awake" está enabled
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        local awakeGui = pg:FindFirstChild("Awake")
+        if awakeGui then
+            ig.Weapon.IsAwaken = awakeGui.Enabled
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- BXZ: ANDAR, ZUMBIS, BOSS
+-- Enemies[Folder] confirmado no Workspace
+-- ═══════════════════════════════════════════════════════════
+local function ReadBXZWorld()
+    local ig = RecordingData.GameStates.InGame
+
+    -- Zumbis: Workspace.Enemies (confirmado pelo diagnóstico)
+    local enemies = Workspace:FindFirstChild("Enemies")
+    if enemies then
+        ig.ZombiesLeft = #enemies:GetChildren()
+    end
+
+    -- Location (StringValue no Workspace) pode indicar mapa/andar
+    local location = Workspace:FindFirstChild("Location")
+    if location and location:IsA("StringValue") then
+        ig.Floor = location.Value  -- pode ser string tipo "Floor_5"
+    end
+
+    -- Tenta ler andar de outras fontes
+    for _, attr in ipairs({"Floor","Stage","Level","Andar","CurrentFloor","Wave"}) do
+        local v = Workspace:GetAttribute(attr)
+        if v then ig.Floor = v; break end
+    end
+
+    -- Boss: procura por Model com Humanoid em Workspace que não seja jogador
+    ig.Boss.Active = false
+    local playerNames = {}
+    for _, p in pairs(Players:GetPlayers()) do playerNames[p.Name] = true end
+
+    for _, obj in pairs(Workspace:GetChildren()) do
+        if obj:IsA("Model") and not playerNames[obj.Name] then
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            if hum and hum.MaxHealth > 500 and hum.Health > 0 then
+                -- Provavelmente é um boss (HP alto)
+                ig.Boss.Active = true
+                ig.Boss.Name   = obj.Name
+                ig.Boss.HP     = math.floor(hum.Health)
+                ig.Boss.MaxHP  = math.floor(hum.MaxHealth)
+                break
+            end
+        end
+    end
+
+    ig.IsBossFloor = ig.Boss.Active
+
+    if ig.Floor ~= LastFloor and ig.Floor ~= 0 then
+        AddToTimeline("NEW_FLOOR", {Floor = ig.Floor})
+        LastFloor = ig.Floor
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- BXZ: BAÚS via ScreenGui "Chest" (confirmado no diagnóstico)
+-- ═══════════════════════════════════════════════════════════
+local function ReadBXZChest()
+    local ig = RecordingData.GameStates.InGame
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+
+    -- ScreenGui "Chest" fica enabled quando baú está disponível
+    local chestGui = pg:FindFirstChild("Chest")
+    if chestGui then
+        local wasAvailable = ig.Chest.Available
+        ig.Chest.Available = chestGui.Enabled
+
+        if chestGui.Enabled and not wasAvailable then
+            AddToTimeline("CHEST_APPEARED", {Floor = ig.Floor})
+            Log("📦 Baú apareceu!")
+        end
+
+        -- Lê recompensa do texto dentro do Chest GUI
+        if chestGui.Enabled then
+            for _, obj in pairs(chestGui:GetDescendants()) do
+                if obj:IsA("TextLabel") and #obj.Text > 0 and #obj.Text < 200 then
+                    ig.Chest.LastReward = obj.Text
+                end
+            end
+        end
+    end
+
+    -- Chest_Event também
+    local chestEvent = pg:FindFirstChild("Chest_Event")
+    if chestEvent and chestEvent.Enabled then
+        ig.Chest.Available = true
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- MONITORAR REMOTES REAIS DO BXZ
+-- ReplicatedStorage.Remotes.* (confirmado pelo diagnóstico)
+-- ═══════════════════════════════════════════════════════════
+local function MonitorRemotes()
+    -- Hook global via hookmetamethod (pega TODOS de uma vez)
+    pcall(function()
+        local old
+        old = hookmetamethod(game, "__namecall", function(self, ...)
+            local method = getnamecallmethod()
+            if method == "FireServer" or method == "InvokeServer" then
+                if self:IsA("RemoteEvent") or self:IsA("RemoteFunction") then
+                    RemoteCount = RemoteCount + 1
+
+                    if #RecordingData.Interactions.RemoteCalls >= Config.MaxRemoteCalls then
+                        table.remove(RecordingData.Interactions.RemoteCalls, 1)
+                    end
+
+                    local args = {...}
+                    local argsStr = ""
+                    pcall(function()
+                        argsStr = HttpService:JSONEncode(args):sub(1, 120)
+                    end)
+
+                    local remoteName = self.Name
+                    table.insert(RecordingData.Interactions.RemoteCalls, {
+                        ID     = RemoteCount,
+                        Remote = remoteName,
+                        Path   = self:GetFullName(),
+                        Args   = argsStr,
+                        Time   = os.date("%H:%M:%S")
+                    })
+
+                    -- Conta skills específicas do BXZ
+                    local ig = RecordingData.GameStates.InGame
+                    if remoteName == "RequestSwing"    then ig.Skills.Swings    = ig.Skills.Swings + 1 end
+                    if remoteName == "RequestSkillEvent" then ig.Skills.Skills  = ig.Skills.Skills + 1 end
+                    if remoteName == "RequestUltimateEvent" then ig.Skills.Ultimates = ig.Skills.Ultimates + 1 end
+                    if remoteName == "RequestDashEvent" then ig.Skills.Dashes   = ig.Skills.Dashes + 1 end
+                    if remoteName == "OpenChestEvent"  then
+                        ig.Chest.TotalOpened = ig.Chest.TotalOpened + 1
+                        ig.Chest.Available   = false
+                        AddToTimeline("CHEST_OPENED", {Total = ig.Chest.TotalOpened, Floor = ig.Floor})
+                        Log("📦 Baú aberto! Total: " .. ig.Chest.TotalOpened)
+                    end
+
+                    RecordingData.Interactions.Summary.TotalRemotes = RemoteCount
+                    AddToTimeline("REMOTE", {Name = remoteName, Args = argsStr})
+                end
+            end
+            return old(self, ...)
+        end)
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- MONITORAR CLIQUES
+-- ═══════════════════════════════════════════════════════════
+local function MonitorClicks()
+    Mouse.Button1Down:Connect(function()
+        ClickCount = ClickCount + 1
+        if #RecordingData.Interactions.Clicks >= Config.MaxClicks then
+            table.remove(RecordingData.Interactions.Clicks, 1)
+        end
+        local target = Mouse.Target
+        local tName  = target and target.Name or "Vazio"
+        table.insert(RecordingData.Interactions.Clicks, {
+            ID=ClickCount, Target=tName, State=CurrentState, Time=os.date("%H:%M:%S")
+        })
+        RecordingData.Interactions.Summary.UniqueTargets[tName] = true
+        RecordingData.Interactions.Summary.TotalClicks = ClickCount
+        AddToTimeline("CLICK", {Target = tName})
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- DETECTAR ESTADO
+-- ═══════════════════════════════════════════════════════════
+function DetectGameState()
+    local state = "UNKNOWN"
+    -- Se Enemies folder existe = in game
+    if Workspace:FindFirstChild("Enemies") then
+        state = "IN_GAME"
+    end
+    -- Fallback: character com humanoid
+    if state == "UNKNOWN" and LocalPlayer.Character and
+       LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+        state = "IN_GAME"
+    end
+    if state ~= CurrentState and state ~= "UNKNOWN" then
+        AddToTimeline("STATE_CHANGE", {From = CurrentState, To = state})
+        CurrentState = state
+    end
+    return state
+end
+
+function ScanImportantUI()
+    local important = { Buttons = {}, Labels = {} }
+    local gui = LocalPlayer.PlayerGui
+    local count = 0
+    -- GUIs importantes do BXZ identificadas no diagnóstico:
+    local importantGuis = {"HUD","Chest","Awake","Inventory","Store","Upgrade","Raid","TextPopUp"}
+    for _, guiName in ipairs(importantGuis) do
+        local screen = gui:FindFirstChild(guiName)
+        if screen and screen.Enabled then
+            for _, obj in pairs(screen:GetDescendants()) do
+                if count >= 30 then break end
+                if not obj.Visible then continue end
+                if obj:IsA("TextButton") then
+                    table.insert(important.Buttons, {
+                        GUI=guiName, Name=obj.Name, Text=obj.Text,
+                        Parent=obj.Parent and obj.Parent.Name or ""
+                    })
+                    count = count + 1
+                end
+                if obj:IsA("TextLabel") and #obj.Text > 0 and #obj.Text < 150 then
+                    table.insert(important.Labels, {
+                        GUI=guiName, Name=obj.Name, Text=obj.Text
+                    })
+                    count = count + 1
+                end
+            end
+        end
+    end
+    return important
+end
+
+function CaptureCurrentState()
+    local state = DetectGameState()
+    local ui    = ScanImportantUI()
+
+    if state == "IN_GAME" then
+        RecordingData.GameStates.InGame.Captured = true
+        ReadBXZStats()
+        ReadBXZWorld()
+        ReadBXZChest()
+        local ig = RecordingData.GameStates.InGame
+        Log("✅ Capturado!" ..
+            " HP=" .. ig.Player.HP ..
+            " Money=" .. ig.Player.Money ..
+            " Gem=" .. ig.Player.Gem ..
+            " Damage=" .. ig.Player.Damage ..
+            " Zumbis=" .. ig.ZombiesLeft ..
+            " Arma=" .. ig.Weapon.Name ..
+            " Awaken=" .. tostring(ig.Weapon.IsAwaken) ..
+            " Baús=" .. ig.Chest.TotalOpened)
+    end
+
+    RecordingData.GameStates.InGame.UI = ui
+    AddToTimeline("CAPTURE", {State = state})
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- EXPORTAR JSON
+-- ═══════════════════════════════════════════════════════════
+function ExportJSON()
+    RecordingData.SessionInfo.EndTime  = os.time()
+    RecordingData.SessionInfo.Duration = RecordingData.SessionInfo.EndTime - RecordingData.SessionInfo.StartTime
+    local json = HttpService:JSONEncode(RecordingData)
+    print("\n" .. string.rep("=", 60))
+    print("EZZ v3.5 BXZ - JSON")
+    print(string.rep("=", 60))
+    print(json)
+    print(string.rep("=", 60))
+    print("Tamanho: " .. #json .. " chars")
+    return json
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- INTERFACE
+-- ═══════════════════════════════════════════════════════════
+local function CreateUI()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not gui then return end
+    if gui:FindFirstChild("EZZ_Compact") then gui.EZZ_Compact:Destroy() end
+
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "EZZ_Compact"
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = 999999
+    screen.Parent = gui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 280, 0, 270)
+    frame.Position = UDim2.new(0, 10, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = screen
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = Color3.fromRGB(255, 0, 0)
+    stroke.Thickness = 2
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundTransparency = 1
+    title.Text = "🔴 EZZ v3.5 - BLADE X ZOMBIES"
+    title.TextColor3 = Color3.fromRGB(255, 0, 0)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 12
+    title.Parent = frame
+
+    local info = Instance.new("TextLabel")
+    info.Name = "Info"
+    info.Size = UDim2.new(0.9, 0, 0, 150)
+    info.Position = UDim2.new(0.05, 0, 0.12, 0)
+    info.BackgroundTransparency = 1
+    info.Text = "Iniciando..."
+    info.TextColor3 = Color3.new(1, 1, 1)
+    info.Font = Enum.Font.Gotham
+    info.TextSize = 10
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.TextYAlignment = Enum.TextYAlignment.Top
+    info.TextWrapped = true
+    info.Parent = frame
+    DebugUI = info
+
+    local captureBtn = Instance.new("TextButton")
+    captureBtn.Size = UDim2.new(0.9, 0, 0, 30)
+    captureBtn.Position = UDim2.new(0.05, 0, 0, 180)
+    captureBtn.BackgroundColor3 = Color3.fromRGB(255, 165, 0)
+    captureBtn.Text = "📸 CAPTURAR"
+    captureBtn.TextColor3 = Color3.new(0, 0, 0)
+    captureBtn.Font = Enum.Font.GothamBold
+    captureBtn.TextSize = 11
+    captureBtn.Parent = frame
+    Instance.new("UICorner", captureBtn).CornerRadius = UDim.new(0, 6)
+    captureBtn.MouseButton1Click:Connect(function()
+        CaptureCurrentState()
+        captureBtn.Text = "✅ OK!"
+        wait(1); captureBtn.Text = "📸 CAPTURAR"
+    end)
+
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Size = UDim2.new(0.9, 0, 0, 30)
+    copyBtn.Position = UDim2.new(0.05, 0, 0, 215)
+    copyBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 127)
+    copyBtn.Text = "📋 COPIAR JSON"
+    copyBtn.TextColor3 = Color3.new(0, 0, 0)
+    copyBtn.Font = Enum.Font.GothamBold
+    copyBtn.TextSize = 11
+    copyBtn.Parent = frame
+    Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 6)
+    copyBtn.MouseButton1Click:Connect(function()
+        local json = ExportJSON()
+        if setclipboard then
+            setclipboard(json)
+            copyBtn.Text = "✅ COPIADO!"
+            wait(2); copyBtn.Text = "📋 COPIAR JSON"
+        else
+            copyBtn.Text = "Ver console!"
+            wait(2); copyBtn.Text = "📋 COPIAR JSON"
+        end
+    end)
+
+    local resetBtn = Instance.new("TextButton")
+    resetBtn.Size = UDim2.new(0.9, 0, 0, 25)
+    resetBtn.Position = UDim2.new(0.05, 0, 0, 248)
+    resetBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    resetBtn.Text = "🗑️ LIMPAR"
+    resetBtn.TextColor3 = Color3.new(1, 1, 1)
+    resetBtn.Font = Enum.Font.Gotham
+    resetBtn.TextSize = 10
+    resetBtn.Parent = frame
+    Instance.new("UICorner", resetBtn).CornerRadius = UDim.new(0, 6)
+    resetBtn.MouseButton1Click:Connect(function()
+        RecordingData.Timeline = {}
+        RecordingData.Interactions.Clicks = {}
+        RecordingData.Interactions.RemoteCalls = {}
+        ClickCount = 0; RemoteCount = 0
+        resetBtn.Text = "✅ LIMPO!"
+        wait(1.5); resetBtn.Text = "🗑️ LIMPAR"
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- ATUALIZAR UI
+-- ═══════════════════════════════════════════════════════════
+local function UpdateUI()
+    if not DebugUI then return end
+    local ig = RecordingData.GameStates.InGame
+    local status = {
+        RecordingData.GameStates.MainMenu.Captured and "✅Menu" or "⏳Menu",
+        RecordingData.GameStates.Lobby.Captured    and "✅Lobby" or "⏳Lobby",
+        RecordingData.GameStates.InGame.Captured   and "✅Jogo" or "⏳Jogo"
+    }
+
+    local extra = ""
+    if ig.Boss.Active then
+        extra = "\n👹 BOSS: " .. ig.Boss.Name .. " HP:" .. ig.Boss.HP .. "/" .. ig.Boss.MaxHP
+    elseif ig.Chest.Available then
+        extra = "\n📦 BAÚ DISPONÍVEL!"
+    elseif ig.Chest.TotalOpened > 0 then
+        extra = "\n🎁 Baús abertos: " .. ig.Chest.TotalOpened
+    end
+
+    DebugUI.Text = string.format(
+        "Estado: %s\n%s\n\n" ..
+        "❤️ HP: %d/%d\n" ..
+        "💰 Money: %d  💎 Gem: %d\n" ..
+        "📜 Scroll: %d  🩸 Blood: %d\n" ..
+        "⚔️ Dmg: %d | Zumbis: %d\n" ..
+        "🗡️ %s%s\n" ..
+        "🎮 Swings:%d Skill:%d Ult:%d\n" ..
+        "📡 Remotes: %d | 🖱️ %d\n" ..
+        "⏱️ %ds",
+        CurrentState,
+        table.concat(status, " | "),
+        ig.Player.HP, ig.Player.MaxHP,
+        ig.Player.Money, ig.Player.Gem,
+        ig.Player.Scroll, ig.Player.Blood,
+        ig.Player.Damage, ig.ZombiesLeft,
+        ig.Weapon.Name, (ig.Weapon.IsAwaken and " ✨AWAKEN" or ""),
+        ig.Skills.Swings, ig.Skills.Skills, ig.Skills.Ultimates,
+        RemoteCount, ClickCount,
+        os.time() - RecordingData.SessionInfo.StartTime
+    ) .. extra
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- INICIALIZAÇÃO
+-- ═══════════════════════════════════════════════════════════
+Log("EZZ v3.5 BXZ - Iniciando com nomes reais do jogo...")
+
+CreateUI()
+wait(1)
+MonitorClicks()
+MonitorRemotes()
+
+task.spawn(function()
+    while wait(2) do
+        DetectGameState()
+        pcall(ReadBXZStats)
+        pcall(ReadBXZWorld)
+        pcall(ReadBXZChest)
+        UpdateUI()
+    end
+end)
+
+Log("✅ EZZ v3.5 ativo!")
+Log("   Money/Gem/Scroll/Blood lidos direto do LocalPlayer")
+Log("   Zumbis lidos de Workspace.Enemies")
+Log("   Baú monitorado pelo ScreenGui 'Chest'")
+Log("   Remotes: RequestSwing, RequestSkillEvent, RequestUltimateEvent, OpenChestEvent")
+
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "EZZ v3.5 BXZ",
+        Text = "Nomes reais do jogo carregados!",
+        Duration = 5
+    })
+end)

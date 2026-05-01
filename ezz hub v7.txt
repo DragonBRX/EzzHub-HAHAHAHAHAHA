@@ -1,0 +1,1728 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local StarterGui = game:GetService("StarterGui")
+local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- ============================================================
+-- COMPATIBILIDADE DE EXECUTOR
+-- ============================================================
+local function hasFunc(name)
+    local ok, val = pcall(function() return _G[name] end)
+    if ok and val ~= nil then return true end
+    if getfenv then
+        local ok2, val2 = pcall(function() return getfenv()[name] end)
+        if ok2 and val2 ~= nil then return true end
+    end
+    return false
+end
+
+local CAPS = {
+    hook = hasFunc("hookmetamethod") and hasFunc("getnamecallmethod"),
+    newcclosure = hasFunc("newcclosure"),
+    checkcaller = hasFunc("checkcaller"),
+    setclipboard = hasFunc("setclipboard"),
+    writefile = hasFunc("writefile"),
+    readfile = hasFunc("readfile"),
+    isfile = hasFunc("isfile"),
+    tasklib = (task ~= nil),
+}
+
+local function xWait(n)
+    if CAPS.tasklib then task.wait(n or 0) else wait(n or 0) end
+end
+local function xSpawn(fn)
+    if CAPS.tasklib then task.spawn(fn) else spawn(fn) end
+end
+local function xDelay(n, fn)
+    if CAPS.tasklib then task.delay(n, fn) else delay(n, fn) end
+end
+
+-- ============================================================
+-- CATALOGADOR CENTRAL - O CEREBRO DO SISTEMA
+-- ============================================================
+local Catalog = {}
+do
+    local Database = {
+        -- Categorias principais
+        Remotes = {
+            FireServer = {},
+            InvokeServer = {},
+            OnClientEvent = {},
+        },
+        Instances = {
+            Parts = {},
+            Models = {},
+            Humanoids = {},
+            Tools = {},
+            Scripts = {},
+            GUIs = {},
+            Effects = {},
+            Sounds = {},
+            Animations = {},
+            ValueObjects = {},
+        },
+        Locations = {
+            SpawnPoints = {},
+            Shops = {},
+            Checkpoints = {},
+            Teleporters = {},
+            SecretAreas = {},
+        },
+        GameData = {
+            MoneySystems = {},
+            InventorySystems = {},
+            LevelSystems = {},
+            QuestSystems = {},
+        },
+        NPCs = {
+            Enemies = {},
+            Friendly = {},
+            Merchants = {},
+            QuestGivers = {},
+        },
+        PlayerData = {
+            Stats = {},
+            Values = {},
+            Attributes = {},
+        },
+        Codes = {
+            PromoCodes = {},
+            HiddenStrings = {},
+            Encrypted = {},
+        },
+        Patterns = {
+            RemoteSignatures = {},
+            CommonArgs = {},
+            Frequencies = {},
+        },
+    }
+    
+    local Stats = {
+        totalCaptured = 0,
+        startTime = tick(),
+        lastUpdate = 0,
+    }
+    
+    -- Sistema de serializacao robusto
+    local function SerializeValue(val, depth)
+        depth = depth or 0
+        if depth > 4 then return '"[Deep]"' end
+        
+        local t = type(val)
+        if t == "nil" then return "nil"
+        elseif t == "boolean" then return val and "true" or "false"
+        elseif t == "number" then 
+            if val == math.huge then return "math.huge"
+            elseif val == -math.huge then return "-math.huge"
+            else return string.format("%.6g", val)
+            end
+        elseif t == "string" then 
+            return string.format("%q", val:sub(1, 500))
+        elseif t == "table" then
+            local items = {}
+            local count = 0
+            local isArray = #val > 0
+            
+            if isArray then
+                for i, v in ipairs(val) do
+                    count = count + 1
+                    if count > 20 then table.insert(items, '"..."'); break end
+                    table.insert(items, SerializeValue(v, depth + 1))
+                end
+                return "{" .. table.concat(items, ", ") .. "}"
+            else
+                for k, v in pairs(val) do
+                    count = count + 1
+                    if count > 15 then table.insert(items, '... = "..."'); break end
+                    table.insert(items, string.format("[%s] = %s", 
+                        SerializeValue(k, depth + 1), 
+                        SerializeValue(v, depth + 1)))
+                end
+                return "{" .. table.concat(items, ", ") .. "}"
+            end
+        elseif typeof then
+            local typ = typeof(val)
+            if typ == "Instance" then
+                local ok, name = pcall(function() return val:GetFullName() end)
+                if ok then
+                    return string.format('game:FindFirstChild("%s", true)', name)
+                end
+                return '"[Instance]"'
+            elseif typ == "Vector3" then
+                return string.format("Vector3.new(%.4f, %.4f, %.4f)", val.X, val.Y, val.Z)
+            elseif typ == "CFrame" then
+                return string.format("CFrame.new(%.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f, %.4f)",
+                    val:components())
+            elseif typ == "Color3" then
+                return string.format("Color3.fromRGB(%d, %d, %d)", 
+                    math.floor(val.R * 255), math.floor(val.G * 255), math.floor(val.B * 255))
+            elseif typ == "UDim2" then
+                return string.format("UDim2.new(%.4f, %d, %.4f, %d)", 
+                    val.X.Scale, val.X.Offset, val.Y.Scale, val.Y.Offset)
+            elseif typ == "UDim" then
+                return string.format("UDim.new(%.4f, %d)", val.Scale, val.Offset)
+            elseif typ == "EnumItem" then
+                return tostring(val)
+            elseif typ == "Ray" then
+                return string.format("Ray.new(%s, %s)", 
+                    SerializeValue(val.Origin, depth + 1),
+                    SerializeValue(val.Direction, depth + 1))
+            elseif typ == "BrickColor" then
+                return string.format('BrickColor.new("%s")', val.Name)
+            else
+                return string.format('"[%s]"', typ)
+            end
+        end
+        return '"[Unknown]"'
+    end
+    
+    -- Classificador inteligente de remotes
+    local function ClassifyRemote(name, args, method)
+        local lower = name:lower()
+        local category = "General"
+        local subCategory = "Other"
+        local confidence = 0
+        
+        -- Heuristicas de classificacao
+        if lower:find("money") or lower:find("cash") or lower:find("coin") or 
+           lower:find("buy") or lower:find("purchase") or lower:find("shop") or
+           lower:find("sell") or lower:find("trade") or lower:find("pay") then
+            category = "Economy"
+            subCategory = "Transaction"
+            confidence = 90
+        elseif lower:find("teleport") or lower:find("tp") or lower:find("warp") or
+               lower:find("spawn") or lower:find("position") or lower:find("move") or
+               lower:find("goto") or lower:find("travel") then
+            category = "Movement"
+            subCategory = "Teleport"
+            confidence = 85
+        elseif lower:find("damage") or lower:find("hit") or lower:find("attack") or
+               lower:find("fire") or lower:find("shoot") or lower:find("kill") or
+               lower:find("hurt") or lower:find("combat") or lower:find("weapon") then
+            category = "Combat"
+            subCategory = "Damage"
+            confidence = 80
+        elseif lower:find("item") or lower:find("tool") or lower:find("equip") or
+               lower:find("inventory") or lower:find("give") or lower:find("drop") or
+               lower:find("pickup") or lower:find("loot") then
+            category = "Inventory"
+            subCategory = "Item"
+            confidence = 75
+        elseif lower:find("quest") or lower:find("mission") or lower:find("task") or
+               lower:find("objective") or lower:find("complete") then
+            category = "Quest"
+            subCategory = "Progress"
+            confidence = 70
+        elseif lower:find("chat") or lower:find("message") or lower:find("say") or
+               lower:find("talk") or lower:find("whisper") then
+            category = "Social"
+            subCategory = "Chat"
+            confidence = 95
+        elseif lower:find("admin") or lower:find("mod") or lower:find("ban") or
+               lower:find("kick") or lower:find("command") then
+            category = "Admin"
+            subCategory = "Moderation"
+            confidence = 80
+        elseif lower:find("replicate") or lower:find("sync") or lower:find("update") then
+            category = "System"
+            subCategory = "Replication"
+            confidence = 60
+        end
+        
+        -- Analise de argumentos para refinamento
+        if args and #args > 0 then
+            if type(args[1]) == "number" and (category == "Combat" or category == "Economy") then
+                subCategory = subCategory .. "_Amount"
+            end
+            if typeof(args[1]) == "Vector3" or typeof(args[1]) == "CFrame" then
+                if category == "General" then
+                    category = "Movement"
+                    subCategory = "Position"
+                    confidence = 70
+                end
+            end
+        end
+        
+        return category, subCategory, confidence
+    end
+    
+    -- Adiciona remote ao catalogo
+    function Catalog.AddRemote(remoteRef, method, args, timestamp)
+        Stats.totalCaptured = Stats.totalCaptured + 1
+        
+        local name = ""
+        local path = ""
+        local className = ""
+        
+        pcall(function()
+            name = remoteRef.Name
+            path = remoteRef:GetFullName()
+            className = remoteRef.ClassName
+        end)
+        
+        if name == "" then return end
+        
+        -- Evita duplicados excessivos (max 100 por remote)
+        local storage = Database.Remotes[method]
+        if not storage[name] then
+            storage[name] = {
+                entries = {},
+                meta = {
+                    name = name,
+                    path = path,
+                    className = className,
+                    method = method,
+                    firstSeen = timestamp,
+                    callCount = 0,
+                    categories = {},
+                }
+            }
+        end
+        
+        local entry = storage[name]
+        entry.meta.callCount = entry.meta.callCount + 1
+        entry.meta.lastSeen = timestamp
+        
+        -- Classifica
+        local category, subCategory, confidence = ClassifyRemote(name, args, method)
+        local catKey = category .. "_" .. subCategory
+        entry.meta.categories[catKey] = (entry.meta.categories[catKey] or 0) + 1
+        
+        -- Limita entradas detalhadas
+        if #entry.entries < 50 then
+            local serialized = {}
+            for i, arg in ipairs(args) do
+                serialized[i] = SerializeValue(arg)
+            end
+            
+            table.insert(entry.entries, {
+                timestamp = timestamp,
+                args = args,
+                serialized = serialized,
+                argTypes = (function()
+                    local types = {}
+                    for i, arg in ipairs(args) do
+                        types[i] = typeof and typeof(arg) or type(arg)
+                    end
+                    return types
+                end)(),
+                category = category,
+                subCategory = subCategory,
+                confidence = confidence,
+            })
+        end
+        
+        -- Atualiza padroes globais
+        local sig = ""
+        for i, arg in ipairs(args) do
+            if i > 3 then break end
+            sig = sig .. (typeof and typeof(arg) or type(arg)) .. ","
+        end
+        Database.Patterns.RemoteSignatures[name] = sig
+        Database.Patterns.CommonArgs[sig] = (Database.Patterns.CommonArgs[sig] or 0) + 1
+    end
+    
+    -- Adiciona instancia ao catalogo
+    function Catalog.AddInstance(inst)
+        local category = "Other"
+        local subCategory = "General"
+        
+        if inst:IsA("BasePart") or inst:IsA("MeshPart") or inst:IsA("Part") then
+            category = "Parts"
+            local name = inst.Name:lower()
+            if name:find("spawn") or name:find("start") then
+                subCategory = "SpawnPoints"
+                table.insert(Database.Locations.SpawnPoints, {
+                    name = inst.Name,
+                    position = inst.Position,
+                    path = inst:GetFullName(),
+                })
+            elseif name:find("shop") or name:find("store") or name:find("buy") then
+                subCategory = "Shops"
+                table.insert(Database.Locations.Shops, {
+                    name = inst.Name,
+                    position = inst.Position,
+                    path = inst:GetFullName(),
+                })
+            elseif name:find("checkpoint") or name:find("save") then
+                subCategory = "Checkpoints"
+                table.insert(Database.Locations.Checkpoints, {
+                    name = inst.Name,
+                    position = inst.Position,
+                    path = inst:GetFullName(),
+                })
+            elseif name:find("teleport") or name:find("portal") or name:find("warp") then
+                subCategory = "Teleporters"
+                table.insert(Database.Locations.Teleporters, {
+                    name = inst.Name,
+                    position = inst.Position,
+                    path = inst:GetFullName(),
+                })
+            else
+                subCategory = "Generic"
+            end
+            
+            table.insert(Database.Instances.Parts, {
+                name = inst.Name,
+                className = inst.ClassName,
+                position = inst.Position,
+                size = inst.Size,
+                path = inst:GetFullName(),
+                subCategory = subCategory,
+            })
+            
+        elseif inst:IsA("Model") then
+            category = "Models"
+            local humanoid = inst:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                if Players:GetPlayerFromCharacter(inst) then
+                    subCategory = "PlayerCharacters"
+                else
+                    subCategory = "NPCs"
+                    -- Classifica NPC
+                    local isEnemy = inst.Name:lower():find("enemy") or 
+                                   inst.Name:lower():find("mob") or
+                                   inst.Name:lower():find("zombie") or
+                                   inst.Name:lower():find("boss")
+                    
+                    local npcData = {
+                        name = inst.Name,
+                        health = humanoid.Health,
+                        maxHealth = humanoid.MaxHealth,
+                        position = inst:FindFirstChild("HumanoidRootPart") and 
+                                  inst.HumanoidRootPart.Position or inst:GetPivot().Position,
+                        path = inst:GetFullName(),
+                        isEnemy = isEnemy,
+                    }
+                    
+                    if isEnemy then
+                        table.insert(Database.NPCs.Enemies, npcData)
+                    else
+                        table.insert(Database.NPCs.Friendly, npcData)
+                    end
+                end
+            end
+            
+            table.insert(Database.Instances.Models, {
+                name = inst.Name,
+                hasHumanoid = humanoid ~= nil,
+                path = inst:GetFullName(),
+                subCategory = subCategory,
+            })
+            
+        elseif inst:IsA("Tool") then
+            category = "Tools"
+            table.insert(Database.Instances.Tools, {
+                name = inst.Name,
+                path = inst:GetFullName(),
+                requiresHandle = inst:FindFirstChild("Handle") ~= nil,
+            })
+            
+        elseif inst:IsA("ValueBase") then
+            category = "ValueObjects"
+            local name = inst.Name:lower()
+            local subCat = "Generic"
+            
+            if name:find("money") or name:find("cash") or name:find("coin") or
+               name:find("gold") or name:find("gem") then
+                subCat = "Currency"
+                table.insert(Database.GameData.MoneySystems, {
+                    name = inst.Name,
+                    value = inst.Value,
+                    type = inst.ClassName,
+                    path = inst:GetFullName(),
+                })
+            elseif name:find("level") or name:find("xp") or name:find("exp") or
+                   name:find("rank") then
+                subCat = "Progression"
+                table.insert(Database.GameData.LevelSystems, {
+                    name = inst.Name,
+                    value = inst.Value,
+                    type = inst.ClassName,
+                    path = inst:GetFullName(),
+                })
+            elseif name:find("inventory") or name:find("item") or name:find("slot") then
+                subCat = "Inventory"
+            end
+            
+            table.insert(Database.Instances.ValueObjects, {
+                name = inst.Name,
+                className = inst.ClassName,
+                value = inst.Value,
+                path = inst:GetFullName(),
+                subCategory = subCat,
+            })
+            
+        elseif inst:IsA("ScreenGui") or inst:IsA("BillboardGui") then
+            category = "GUIs"
+            table.insert(Database.Instances.GUIs, {
+                name = inst.Name,
+                className = inst.ClassName,
+                path = inst:GetFullName(),
+            })
+            
+        elseif inst:IsA("Sound") then
+            category = "Sounds"
+            table.insert(Database.Instances.Sounds, {
+                name = inst.Name,
+                soundId = inst.SoundId,
+                path = inst:GetFullName(),
+            })
+            
+        elseif inst:IsA("Animation") then
+            category = "Animations"
+            table.insert(Database.Instances.Animations, {
+                name = inst.Name,
+                animationId = inst.AnimationId,
+                path = inst:GetFullName(),
+            })
+        end
+        
+        Stats.totalCaptured = Stats.totalCaptured + 1
+    end
+    
+    -- Adiciona codigo/string encontrada
+    function Catalog.AddCode(text, source, context)
+        local lower = text:lower()
+        local isPromo = lower:find("code") or lower:find("promo") or lower:find("redeem")
+        local isHidden = context and context:find("Hidden") ~= nil
+        
+        local entry = {
+            text = text,
+            source = source,
+            context = context,
+            timestamp = tick(),
+            isEncrypted = text:match("^[%w+/=]+$") ~= nil, -- Base64-like
+        }
+        
+        if isPromo then
+            table.insert(Database.Codes.PromoCodes, entry)
+        elseif isHidden then
+            table.insert(Database.Codes.HiddenStrings, entry)
+        elseif entry.isEncrypted then
+            table.insert(Database.Codes.Encrypted, entry)
+        end
+        
+        Stats.totalCaptured = Stats.totalCaptured + 1
+    end
+    
+    -- Adiciona dados do jogador
+    function Catalog.AddPlayerData(player)
+        if player ~= LocalPlayer then return end
+        
+        -- Stats
+        local leaderstats = player:FindFirstChild("leaderstats")
+        if leaderstats then
+            for _, stat in ipairs(leaderstats:GetChildren()) do
+                if stat:IsA("ValueBase") then
+                    table.insert(Database.PlayerData.Stats, {
+                        name = stat.Name,
+                        type = stat.ClassName,
+                        value = stat.Value,
+                    })
+                end
+            end
+        end
+        
+        -- Valores diretos
+        for _, child in ipairs(player:GetChildren()) do
+            if child:IsA("ValueBase") then
+                table.insert(Database.PlayerData.Values, {
+                    name = child.Name,
+                    type = child.ClassName,
+                    value = child.Value,
+                })
+            end
+        end
+        
+        -- Atributos
+        for _, attr in ipairs(player:GetAttributes()) do
+            table.insert(Database.PlayerData.Attributes, {
+                name = attr,
+                value = player:GetAttribute(attr),
+            })
+        end
+    end
+    
+    -- Gera relatório completo formatado
+    function Catalog.GenerateReport(format)
+        format = format or "text"
+        
+        if format == "lua" then
+            return Catalog.GenerateLuaDatabase()
+        elseif format == "json" then
+            local ok, result = pcall(function()
+                return HttpService:JSONEncode(Database)
+            end)
+            return ok and result or "Error encoding JSON"
+        end
+        
+        -- Formato texto estruturado (padrao)
+        local lines = {}
+        
+        table.insert(lines, "========================================")
+        table.insert(lines, "EZZ HUB CATALOG - RELATORIO COMPLETO")
+        table.insert(lines, "Jogo: " .. game.PlaceId)
+        table.insert(lines, "Gerado: " .. os.date("%Y-%m-%d %H:%M:%S"))
+        table.insert(lines, "Tempo de captura: " .. string.format("%.2f", tick() - Stats.startTime) .. "s")
+        table.insert(lines, "Total capturado: " .. Stats.totalCaptured)
+        table.insert(lines, "========================================")
+        table.insert(lines, "")
+        
+        -- REMOTES
+        table.insert(lines, "[REMOTES CAPTURADOS]")
+        table.insert(lines, "----------------------------------------")
+        
+        for method, remotes in pairs(Database.Remotes) do
+            table.insert(lines, "")
+            table.insert(lines, "  > " .. method .. ":")
+            
+            for name, data in pairs(remotes) do
+                local meta = data.meta
+                table.insert(lines, string.format("    - %s [%s]", name, meta.className))
+                table.insert(lines, string.format("      Chamadas: %d | Path: %s", 
+                    meta.callCount, meta.path))
+                
+                -- Mostra categorias detectadas
+                local cats = {}
+                for cat, count in pairs(meta.categories) do
+                    table.insert(cats, cat .. "(" .. count .. ")")
+                end
+                if #cats > 0 then
+                    table.insert(lines, "      Categorias: " .. table.concat(cats, ", "))
+                end
+                
+                -- Exemplos de argumentos
+                if #data.entries > 0 then
+                    table.insert(lines, "      Exemplos:")
+                    for i = 1, math.min(3, #data.entries) do
+                        local entry = data.entries[i]
+                        local args = table.concat(entry.serialized, ", ")
+                        if #args > 80 then args = args:sub(1, 80) .. "..." end
+                        table.insert(lines, string.format("        [%d] %s", i, args))
+                    end
+                end
+            end
+        end
+        
+        -- INSTANCES
+        table.insert(lines, "")
+        table.insert(lines, "[INSTANCIAS CATALOGADAS]")
+        table.insert(lines, "----------------------------------------")
+        
+        for category, items in pairs(Database.Instances) do
+            if #items > 0 then
+                table.insert(lines, "")
+                table.insert(lines, "  > " .. category .. ": " .. #items .. " items")
+                
+                -- Agrupa por subcategoria
+                local bySub = {}
+                for _, item in ipairs(items) do
+                    local sub = item.subCategory or "General"
+                    if not bySub[sub] then bySub[sub] = {} end
+                    table.insert(bySub[sub], item)
+                end
+                
+                for sub, subItems in pairs(bySub) do
+                    table.insert(lines, string.format("    [%s]: %d items", sub, #subItems))
+                    for i, item in ipairs(subItems) do
+                        if i <= 5 then -- Limita output
+                            local extra = ""
+                            if item.position then
+                                extra = string.format(" at (%.1f, %.1f, %.1f)", 
+                                    item.position.X, item.position.Y, item.position.Z)
+                            elseif item.value ~= nil then
+                                extra = " = " .. tostring(item.value)
+                            end
+                            table.insert(lines, string.format("      - %s%s", item.name, extra))
+                        elseif i == 6 then
+                            table.insert(lines, "      ... e " .. (#subItems - 5) .. " mais")
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- NPCs
+        if #Database.NPCs.Enemies > 0 or #Database.NPCs.Friendly > 0 then
+            table.insert(lines, "")
+            table.insert(lines, "[NPCs ENCONTRADOS]")
+            table.insert(lines, "----------------------------------------")
+            
+            for _, npc in ipairs(Database.NPCs.Enemies) do
+                table.insert(lines, string.format("  [INIMIGO] %s - HP: %d/%d - Pos: (%.1f, %.1f, %.1f)",
+                    npc.name, npc.health, npc.maxHealth,
+                    npc.position.X, npc.position.Y, npc.position.Z))
+            end
+            
+            for _, npc in ipairs(Database.NPCs.Friendly) do
+                table.insert(lines, string.format("  [AMIGAVEL] %s - HP: %d/%d",
+                    npc.name, npc.health, npc.maxHealth))
+            end
+        end
+        
+        -- LOCAIS
+        if #Database.Locations.SpawnPoints > 0 or #Database.Locations.Shops > 0 then
+            table.insert(lines, "")
+            table.insert(lines, "[LOCAIS IMPORTANTES]")
+            table.insert(lines, "----------------------------------------")
+            
+            for locType, locs in pairs(Database.Locations) do
+                if #locs > 0 then
+                    table.insert(lines, "  > " .. locType .. ":")
+                    for _, loc in ipairs(locs) do
+                        table.insert(lines, string.format("    - %s: (%.2f, %.2f, %.2f)",
+                            loc.name, loc.position.X, loc.position.Y, loc.position.Z))
+                    end
+                end
+            end
+        end
+        
+        -- GAME DATA
+        if #Database.GameData.MoneySystems > 0 then
+            table.insert(lines, "")
+            table.insert(lines, "[SISTEMAS DE ECONOMIA]")
+            table.insert(lines, "----------------------------------------")
+            for _, sys in ipairs(Database.GameData.MoneySystems) do
+                table.insert(lines, string.format("  - %s (%s) = %s", 
+                    sys.name, sys.type, tostring(sys.value)))
+                table.insert(lines, "    Path: " .. sys.path)
+            end
+        end
+        
+        -- CODES
+        if #Database.Codes.PromoCodes > 0 then
+            table.insert(lines, "")
+            table.insert(lines, "[CODIGOS ENCONTRADOS]")
+            table.insert(lines, "----------------------------------------")
+            for _, code in ipairs(Database.Codes.PromoCodes) do
+                table.insert(lines, "  - " .. code.text .. " (from: " .. code.source .. ")")
+            end
+        end
+        
+        -- PADROES
+        table.insert(lines, "")
+        table.insert(lines, "[PADROES DETECTADOS]")
+        table.insert(lines, "----------------------------------------")
+        table.insert(lines, "Assinaturas de argumentos mais comuns:")
+        
+        local sortedSigs = {}
+        for sig, count in pairs(Database.Patterns.CommonArgs) do
+            table.insert(sortedSigs, {sig = sig, count = count})
+        end
+        table.sort(sortedSigs, function(a, b) return a.count > b.count end)
+        
+        for i, data in ipairs(sortedSigs) do
+            if i > 10 then break end
+            table.insert(lines, string.format("  %d. [%s] - %d ocorrencias", 
+                i, data.sig, data.count))
+        end
+        
+        table.insert(lines, "")
+        table.insert(lines, "========================================")
+        table.insert(lines, "FIM DO RELATORIO")
+        table.insert(lines, "========================================")
+        
+        return table.concat(lines, "\n")
+    end
+    
+    -- Gera database em formato Lua (executavel)
+    function Catalog.GenerateLuaDatabase()
+        local lines = {}
+        
+        table.insert(lines, "-- ============================================")
+        table.insert(lines, "-- EZZ HUB CATALOG - DATABASE EXPORT")
+        table.insert(lines, "-- Jogo: " .. game.PlaceId)
+        table.insert(lines, "-- Gerado: " .. os.date("%Y-%m-%d %H:%M:%S"))
+        table.insert(lines, "-- ============================================")
+        table.insert(lines, "")
+        table.insert(lines, "local GameDatabase = {}")
+        table.insert(lines, "")
+        
+        -- Remotes organizados
+        table.insert(lines, "-- REMOTES ORGANIZADOS POR CATEGORIA")
+        table.insert(lines, "GameDatabase.Remotes = {")
+        
+        local categories = {}
+        for method, remotes in pairs(Database.Remotes) do
+            for name, data in pairs(remotes) do
+                for cat, _ in pairs(data.meta.categories) do
+                    if not categories[cat] then categories[cat] = {} end
+                    table.insert(categories[cat], {
+                        name = name,
+                        method = method,
+                        data = data,
+                    })
+                end
+            end
+        end
+        
+        for cat, remotes in pairs(categories) do
+            table.insert(lines, string.format('    ["%s"] = {', cat))
+            for _, remote in ipairs(remotes) do
+                table.insert(lines, string.format('        {'))
+                table.insert(lines, string.format('            Name = %q,', remote.name))
+                table.insert(lines, string.format('            Method = %q,', remote.method))
+                table.insert(lines, string.format('            Path = %q,', remote.data.meta.path))
+                table.insert(lines, string.format('            CallCount = %d,', remote.data.meta.callCount))
+                
+                -- Funcao de execucao
+                table.insert(lines, '            Execute = function(...)')
+                table.insert(lines, string.format('                local remote = game:FindFirstChild(%q, true)', remote.name))
+                table.insert(lines, '                if remote then')
+                if remote.method == "FireServer" then
+                    table.insert(lines, '                    remote:FireServer(...)')
+                else
+                    table.insert(lines, '                    return remote:InvokeServer(...)')
+                end
+                table.insert(lines, '                end')
+                table.insert(lines, '            end,')
+                
+                -- Exemplos de uso
+                if #remote.data.entries > 0 then
+                    table.insert(lines, '            Examples = {')
+                    for _, entry in ipairs(remote.data.entries) do
+                        if #entry.serialized > 0 then
+                            table.insert(lines, string.format('                {%s},', 
+                                table.concat(entry.serialized, ", ")))
+                        end
+                    end
+                    table.insert(lines, '            },')
+                end
+                
+                table.insert(lines, '        },')
+            end
+            table.insert(lines, '    },')
+        end
+        
+        table.insert(lines, "}")
+        table.insert(lines, "")
+        
+        -- Locais
+        table.insert(lines, "-- LOCAIS IMPORTANTES COM COORDENADAS")
+        table.insert(lines, "GameDatabase.Locations = {")
+        for locType, locs in pairs(Database.Locations) do
+            if #locs > 0 then
+                table.insert(lines, string.format('    ["%s"] = {', locType))
+                for _, loc in ipairs(locs) do
+                    table.insert(lines, string.format('        {'))
+                    table.insert(lines, string.format('            Name = %q,', loc.name))
+                    table.insert(lines, string.format('            Position = Vector3.new(%.4f, %.4f, %.4f),',
+                        loc.position.X, loc.position.Y, loc.position.Z))
+                    table.insert(lines, string.format('            Path = %q,', loc.path))
+                    table.insert(lines, '        },')
+                end
+                table.insert(lines, '    },')
+            end
+        end
+        table.insert(lines, "}")
+        table.insert(lines, "")
+        
+        -- NPCs
+        if #Database.NPCs.Enemies > 0 then
+            table.insert(lines, "-- NPCs (INIMIGOS)")
+            table.insert(lines, "GameDatabase.NPCs = {")
+            table.insert(lines, '    Enemies = {')
+            for _, npc in ipairs(Database.NPCs.Enemies) do
+                table.insert(lines, string.format('        {'))
+                table.insert(lines, string.format('            Name = %q,', npc.name))
+                table.insert(lines, string.format('            Health = %d,', npc.health))
+                table.insert(lines, string.format('            MaxHealth = %d,', npc.maxHealth))
+                table.insert(lines, string.format('            Position = Vector3.new(%.4f, %.4f, %.4f),',
+                    npc.position.X, npc.position.Y, npc.position.Z))
+                table.insert(lines, string.format('            Path = %q,', npc.path))
+                table.insert(lines, '        },')
+            end
+            table.insert(lines, '    },')
+            table.insert(lines, "}")
+            table.insert(lines, "")
+        end
+        
+        -- Funcoes utilitarias
+        table.insert(lines, "-- FUNCOES UTILITARIAS")
+        table.insert(lines, "function GameDatabase.GetRemoteByCategory(category)")
+        table.insert(lines, "    return GameDatabase.Remotes[category] or {}")
+        table.insert(lines, "end")
+        table.insert(lines, "")
+        
+        table.insert(lines, "function GameDatabase.GetLocation(locationType, name)")
+        table.insert(lines, "    local locs = GameDatabase.Locations[locationType] or {}")
+        table.insert(lines, "    for _, loc in ipairs(locs) do")
+        table.insert(lines, "        if loc.Name == name then return loc end")
+        table.insert(lines, "    end")
+        table.insert(lines, "    return nil")
+        table.insert(lines, "end")
+        table.insert(lines, "")
+        
+        table.insert(lines, "function GameDatabase.TeleportTo(locationType, name)")
+        table.insert(lines, "    local loc = GameDatabase.GetLocation(locationType, name)")
+        table.insert(lines, "    if loc then")
+        table.insert(lines, "        local player = game:GetService(\"Players\").LocalPlayer")
+        table.insert(lines, "        local char = player.Character")
+        table.insert(lines, "        if char then")
+        table.insert(lines, "            local hrp = char:FindFirstChild(\"HumanoidRootPart\")")
+        table.insert(lines, "            if hrp then")
+        table.insert(lines, "                hrp.CFrame = CFrame.new(loc.Position)")
+        table.insert(lines, "            end")
+        table.insert(lines, "        end")
+        table.insert(lines, "    end")
+        table.insert(lines, "end")
+        table.insert(lines, "")
+        
+        table.insert(lines, "print(\"[EZZ Catalog] Database carregado com \" .. tostring(table.count(GameDatabase.Remotes)) .. \" categorias de remotes\")")
+        table.insert(lines, "return GameDatabase")
+        
+        return table.concat(lines, "\n")
+    end
+    
+    -- Getters
+    function Catalog.GetDatabase() return Database end
+    function Catalog.GetStats() return Stats end
+    function Catalog.Clear()
+        for k, v in pairs(Database) do
+            if type(v) == "table" then
+                for k2, _ in pairs(v) do
+                    if type(Database[k][k2]) == "table" then
+                        Database[k][k2] = {}
+                    end
+                end
+            end
+        end
+        Stats.totalCaptured = 0
+        Stats.startTime = tick()
+    end
+end
+
+-- ============================================================
+-- PASSIVE CAPTURE SYSTEM - Captura sem parar o jogo
+-- ============================================================
+local PassiveCapture = {}
+do
+    local State = {
+        isRunning = false,
+        hooks = {},
+        connections = {},
+    }
+    
+    function PassiveCapture.Start()
+        if State.isRunning then return end
+        State.isRunning = true
+        
+        -- 1. Hook de remotes (PASSIVO - nunca bloqueia)
+        if CAPS.hook then
+            local ok, err = pcall(function()
+                local oldNamecall
+                oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+                    local method = getnamecallmethod()
+                    local args = {...}
+                    local n = select("#", ...)
+                    
+                    -- Verifica se e remote e vem do jogo (nao do nosso script)
+                    local isRemote = false
+                    pcall(function() 
+                        isRemote = (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) 
+                    end)
+                    
+                    if isRemote and (method == "FireServer" or method == "InvokeServer") then
+                        -- Captura em paralelo, NUNCA atrasa o retorno
+                        xSpawn(function()
+                            Catalog.AddRemote(self, method, args, tick())
+                        end)
+                    end
+                    
+                    -- RETORNA IMEDIATAMENTE - SEMPRE
+                    return oldNamecall(self, ...)
+                end))
+            end)
+            
+            if ok then
+                Logger:Info("Hook passivo de remotes ativo")
+            else
+                Logger:Warning("Hook indisponivel: " .. tostring(err))
+            end
+        end
+        
+        -- 2. Scanner de instancias (periodico)
+        xSpawn(function()
+            while State.isRunning do
+                PassiveCapture.ScanWorkspace()
+                xWait(5) -- Scan a cada 5 segundos
+            end
+        end)
+        
+        -- 3. Scanner de player data
+        xSpawn(function()
+            while State.isRunning do
+                Catalog.AddPlayerData(LocalPlayer)
+                xWait(3)
+            end
+        end)
+        
+        -- 4. Captura de OnClientEvent (servidor -> cliente)
+        pcall(function()
+            for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                if obj:IsA("RemoteEvent") then
+                    local conn = obj.OnClientEvent:Connect(function(...)
+                        if not State.isRunning then return end
+                        Catalog.AddRemote(obj, "OnClientEvent", {...}, tick())
+                    end)
+                    table.insert(State.connections, conn)
+                end
+            end
+        end)
+        
+        Logger:Success("Captura passiva iniciada - jogo NAO sera interrompido")
+    end
+    
+    function PassiveCapture.ScanWorkspace()
+        local count = 0
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("Tool") or
+               obj:IsA("ValueBase") or obj:IsA("Humanoid") then
+                Catalog.AddInstance(obj)
+                count = count + 1
+                if count % 100 == 0 then
+                    xWait() -- Evita lag
+                end
+            end
+        end
+    end
+    
+    function PassiveCapture.Stop()
+        State.isRunning = false
+        for _, conn in ipairs(State.connections) do
+            pcall(function() conn:Disconnect() end)
+        end
+        State.connections = {}
+        Logger:Info("Captura parada")
+    end
+    
+    function PassiveCapture.IsRunning() return State.isRunning end
+end
+
+-- ============================================================
+-- INTERFACE
+-- ============================================================
+local UI = {}
+do
+    local Theme = {
+        Background = Color3.fromRGB(15, 15, 20),
+        BackgroundSecondary = Color3.fromRGB(25, 25, 35),
+        BackgroundTertiary = Color3.fromRGB(35, 35, 50),
+        Primary = Color3.fromRGB(220, 50, 50),
+        Secondary = Color3.fromRGB(50, 150, 220),
+        Accent = Color3.fromRGB(255, 200, 50),
+        Success = Color3.fromRGB(50, 220, 100),
+        Warning = Color3.fromRGB(255, 180, 50),
+        Error = Color3.fromRGB(220, 50, 50),
+        TextPrimary = Color3.fromRGB(255, 255, 255),
+        TextSecondary = Color3.fromRGB(180, 180, 200),
+        TextMuted = Color3.fromRGB(120, 120, 140),
+        Border = Color3.fromRGB(50, 50, 70),
+    }
+    
+    local State = {
+        screenGui = nil,
+        mainFrame = nil,
+        isVisible = true,
+        currentTab = "Capture",
+    }
+    
+    local function Tween(obj, props, dur)
+        local info = TweenInfo.new(dur or 0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+        local tw = TweenService:Create(obj, info, props)
+        tw:Play()
+        return tw
+    end
+    
+    local function CreateCorner(parent, radius)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, radius or 8)
+        c.Parent = parent
+        return c
+    end
+    
+    local function CreateButton(config)
+        local button = Instance.new("TextButton")
+        button.Name = config.Name or "Button"
+        button.Size = config.Size or UDim2.new(0, 120, 0, 32)
+        button.Position = config.Position or UDim2.new(0, 0, 0, 0)
+        button.BackgroundColor3 = config.BackgroundColor or Theme.BackgroundSecondary
+        button.Text = config.Text or "Button"
+        button.TextColor3 = config.TextColor or Theme.TextPrimary
+        button.Font = Enum.Font.GothamSemibold
+        button.TextSize = 12
+        button.BorderSizePixel = 0
+        button.AutoButtonColor = false
+        button.Parent = config.Parent
+        CreateCorner(button, config.CornerRadius or 6)
+        
+        button.MouseEnter:Connect(function()
+            Tween(button, {BackgroundColor3 = config.HoverColor or Theme.BackgroundTertiary}, 0.15)
+        end)
+        button.MouseLeave:Connect(function()
+            Tween(button, {BackgroundColor3 = config.BackgroundColor or Theme.BackgroundSecondary}, 0.15)
+        end)
+        
+        if config.Callback then
+            button.MouseButton1Click:Connect(config.Callback)
+        end
+        return button
+    end
+    
+    local function CreateLabel(config)
+        local label = Instance.new("TextLabel")
+        label.Name = config.Name or "Label"
+        label.Size = config.Size or UDim2.new(1, 0, 0, 20)
+        label.Position = config.Position or UDim2.new(0, 0, 0, 0)
+        label.BackgroundTransparency = 1
+        label.Text = config.Text or ""
+        label.TextColor3 = config.TextColor or Theme.TextPrimary
+        label.Font = config.Font or Enum.Font.Gotham
+        label.TextSize = config.TextSize or 12
+        label.TextXAlignment = config.TextXAlignment or Enum.TextXAlignment.Left
+        label.TextWrapped = config.TextWrapped or false
+        label.Parent = config.Parent
+        return label
+    end
+    
+    local function CreateScrollFrame(config)
+        local sf = Instance.new("ScrollingFrame")
+        sf.Name = config.Name or "ScrollFrame"
+        sf.Size = config.Size or UDim2.new(1, 0, 1, 0)
+        sf.Position = config.Position or UDim2.new(0, 0, 0, 0)
+        sf.BackgroundTransparency = 1
+        sf.BorderSizePixel = 0
+        sf.ScrollBarThickness = 4
+        sf.ScrollBarImageColor3 = Theme.Primary
+        sf.CanvasSize = UDim2.new(0, 0, 0, 0)
+        sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        sf.Parent = config.Parent
+        
+        local layout = Instance.new("UIListLayout")
+        layout.Padding = UDim.new(0, 4)
+        layout.Parent = sf
+        
+        return sf
+    end
+    
+    local function SetupCaptureTab(parent)
+        CreateLabel({
+            Name = "Title",
+            Text = "Captura Passiva",
+            Size = UDim2.new(1, -20, 0, 30),
+            Position = UDim2.new(0, 10, 0, 10),
+            Font = Enum.Font.GothamBold,
+            TextSize = 16,
+            Parent = parent,
+        })
+        
+        -- Status
+        local statusFrame = Instance.new("Frame")
+        statusFrame.Name = "StatusFrame"
+        statusFrame.Size = UDim2.new(1, -20, 0, 80)
+        statusFrame.Position = UDim2.new(0, 10, 0, 45)
+        statusFrame.BackgroundColor3 = Theme.BackgroundSecondary
+        statusFrame.BorderSizePixel = 0
+        statusFrame.Parent = parent
+        CreateCorner(statusFrame, 8)
+        
+        local statusLabel = CreateLabel({
+            Name = "Status",
+            Text = "Status: PARADO\nTotal capturado: 0\nTempo: 0s",
+            Size = UDim2.new(1, -20, 1, -20),
+            Position = UDim2.new(0, 10, 0, 10),
+            TextColor3 = Theme.TextSecondary,
+            TextSize = 12,
+            TextWrapped = true,
+            Parent = statusFrame,
+        })
+        
+        -- Botao principal
+        local btnToggle = CreateButton({
+            Name = "BtnToggle",
+            Text = "INICIAR CAPTURA",
+            Size = UDim2.new(1, -20, 0, 50),
+            Position = UDim2.new(0, 10, 0, 135),
+            BackgroundColor = Theme.Success,
+            CornerRadius = 10,
+            Parent = parent,
+        })
+        
+        -- Contador de categorias
+        local catsFrame = Instance.new("Frame")
+        catsFrame.Name = "CatsFrame"
+        catsFrame.Size = UDim2.new(1, -20, 0, 200)
+        catsFrame.Position = UDim2.new(0, 10, 0, 195)
+        catsFrame.BackgroundColor3 = Theme.BackgroundSecondary
+        catsFrame.BorderSizePixel = 0
+        catsFrame.Parent = parent
+        CreateCorner(catsFrame, 8)
+        
+        local catsLabel = CreateLabel({
+            Name = "CatsLabel",
+            Text = "Categorias:\nAguardando inicio...",
+            Size = UDim2.new(1, -20, 1, -20),
+            Position = UDim2.new(0, 10, 0, 10),
+            TextColor3 = Theme.TextMuted,
+            TextSize = 11,
+            TextWrapped = true,
+            Parent = catsFrame,
+        })
+        
+        -- Atualizacao em tempo real
+        xSpawn(function()
+            while wait(0.5) do
+                if not statusLabel.Parent then break end
+                
+                local stats = Catalog.GetStats()
+                local isRunning = PassiveCapture.IsRunning()
+                
+                statusLabel.Text = string.format(
+                    "Status: %s\nTotal capturado: %d\nTempo: %.1fs",
+                    isRunning and "CAPTURANDO..." or "PARADO",
+                    stats.totalCaptured,
+                    tick() - stats.startTime
+                )
+                
+                if isRunning then
+                    statusLabel.TextColor3 = Theme.Success
+                    btnToggle.Text = "PARAR CAPTURA"
+                    btnToggle.BackgroundColor3 = Theme.Error
+                else
+                    statusLabel.TextColor3 = Theme.TextSecondary
+                    btnToggle.Text = "INICIAR CAPTURA"
+                    btnToggle.BackgroundColor3 = Theme.Success
+                end
+                
+                -- Atualiza categorias
+                local db = Catalog.GetDatabase()
+                local catText = "CATEGORIAS DETECTADAS:\n\n"
+                
+                catText = catText .. "[Remotes]\n"
+                for method, remotes in pairs(db.Remotes) do
+                    local count = 0
+                    for _ in pairs(remotes) do count = count + 1 end
+                    if count > 0 then
+                        catText = catText .. string.format("  %s: %d unicos\n", method, count)
+                    end
+                end
+                
+                catText = catText .. "\n[Instancias]\n"
+                for cat, items in pairs(db.Instances) do
+                    if #items > 0 then
+                        catText = catText .. string.format("  %s: %d items\n", cat, #items)
+                    end
+                end
+                
+                catText = catText .. "\n[Locais]\n"
+                for locType, locs in pairs(db.Locations) do
+                    if #locs > 0 then
+                        catText = catText .. string.format("  %s: %d locais\n", locType, #locs)
+                    end
+                end
+                
+                if #db.NPCs.Enemies > 0 then
+                    catText = catText .. string.format("\n[NPCs Inimigos: %d]", #db.NPCs.Enemies)
+                end
+                
+                catsLabel.Text = catText
+                catsLabel.TextColor3 = Theme.TextSecondary
+            end
+        end)
+        
+        -- Toggle
+        btnToggle.MouseButton1Click:Connect(function()
+            if PassiveCapture.IsRunning() then
+                PassiveCapture.Stop()
+            else
+                PassiveCapture.Start()
+            end
+        end)
+    end
+    
+    local function SetupExportTab(parent)
+        CreateLabel({
+            Name = "Title",
+            Text = "Exportar Catalogo",
+            Size = UDim2.new(1, -20, 0, 30),
+            Position = UDim2.new(0, 10, 0, 10),
+            Font = Enum.Font.GothamBold,
+            TextSize = 16,
+            Parent = parent,
+        })
+        
+        CreateLabel({
+            Name = "Warning",
+            Text = "ATENCAO: A captura continua rodando em segundo plano!\nUse estes botoes para copiar o catalogo completo a qualquer momento.",
+            Size = UDim2.new(1, -20, 0, 50),
+            Position = UDim2.new(0, 10, 0, 45),
+            TextColor3 = Theme.Warning,
+            TextSize = 11,
+            TextWrapped = true,
+            Parent = parent,
+        })
+        
+        -- Botoes de export
+        CreateButton({
+            Name = "BtnCopyText",
+            Text = "COPIAR RELATORIO (TEXTO)",
+            Size = UDim2.new(1, -20, 0, 45),
+            Position = UDim2.new(0, 10, 0, 105),
+            BackgroundColor = Theme.Secondary,
+            CornerRadius = 8,
+            Parent = parent,
+            Callback = function()
+                if not CAPS.setclipboard then
+                    Logger:Error("Clipboard nao disponivel")
+                    return
+                end
+                
+                local report = Catalog.GenerateReport("text")
+                setclipboard(report)
+                
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "EZZ CATALOG",
+                        Text = "Relatorio completo copiado!\nTudo classificado por categoria.",
+                        Duration = 3,
+                    })
+                end)
+                
+                Logger:Success("Relatorio de texto copiado")
+            end,
+        })
+        
+        CreateButton({
+            Name = "BtnCopyLua",
+            Text = "COPIAR DATABASE (LUA EXECUTAVEL)",
+            Size = UDim2.new(1, -20, 0, 45),
+            Position = UDim2.new(0, 10, 0, 160),
+            BackgroundColor = Theme.Success,
+            CornerRadius = 8,
+            Parent = parent,
+            Callback = function()
+                if not CAPS.setclipboard then
+                    Logger:Error("Clipboard nao disponivel")
+                    return
+                end
+                
+                local luaDb = Catalog.GenerateReport("lua")
+                setclipboard(luaDb)
+                
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "EZZ CATALOG",
+                        Text = "Database Lua copiado!\nExecute em qualquer executor.",
+                        Duration = 3,
+                    })
+                end)
+                
+                Logger:Success("Database Lua copiado")
+            end,
+        })
+        
+        CreateButton({
+            Name = "BtnSaveFile",
+            Text = "SALVAR EM ARQUIVO",
+            Size = UDim2.new(1, -20, 0, 45),
+            Position = UDim2.new(0, 10, 0, 215),
+            BackgroundColor = Theme.Info,
+            CornerRadius = 8,
+            Parent = parent,
+            Callback = function()
+                if not CAPS.writefile then
+                    Logger:Error("writefile nao disponivel")
+                    return
+                end
+                
+                local report = Catalog.GenerateReport("text")
+                local luaDb = Catalog.GenerateReport("lua")
+                
+                local filename = "EZZ_Catalog_" .. game.PlaceId .. "_" .. os.time() .. ".txt"
+                local luaFilename = "EZZ_Database_" .. game.PlaceId .. "_" .. os.time() .. ".lua"
+                
+                pcall(writefile, filename, report)
+                pcall(writefile, luaFilename, luaDb)
+                
+                Logger:Success("Arquivos salvos: " .. filename .. " e " .. luaFilename)
+                
+                pcall(function()
+                    StarterGui:SetCore("SendNotification", {
+                        Title = "EZZ CATALOG",
+                        Text = "Arquivos salvos com sucesso!",
+                        Duration = 3,
+                    })
+                end)
+            end,
+        })
+        
+        CreateButton({
+            Name = "BtnClear",
+            Text = "LIMPAR CATALOGO",
+            Size = UDim2.new(1, -20, 0, 40),
+            Position = UDim2.new(0, 10, 0, 275),
+            BackgroundColor = Theme.Error,
+            CornerRadius = 8,
+            Parent = parent,
+            Callback = function()
+                Catalog.Clear()
+                Logger:Info("Catalogo limpo")
+            end,
+        })
+        
+        -- Preview do que sera copiado
+        CreateLabel({
+            Text = "Preview do conteudo:",
+            Size = UDim2.new(1, -20, 0, 25),
+            Position = UDim2.new(0, 10, 0, 330),
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+            Parent = parent,
+        })
+        
+        local previewFrame = Instance.new("Frame")
+        previewFrame.Name = "PreviewFrame"
+        previewFrame.Size = UDim2.new(1, -20, 1, -365)
+        previewFrame.Position = UDim2.new(0, 10, 0, 360)
+        previewFrame.BackgroundColor3 = Theme.BackgroundSecondary
+        previewFrame.BorderSizePixel = 0
+        previewFrame.Parent = parent
+        CreateCorner(previewFrame, 8)
+        
+        local previewLabel = CreateLabel({
+            Name = "Preview",
+            Text = "Clique em 'Copiar Relatorio' para ver preview...",
+            Size = UDim2.new(1, -20, 1, -20),
+            Position = UDim2.new(0, 10, 0, 10),
+            TextColor3 = Theme.TextMuted,
+            TextSize = 10,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
+            Parent = previewFrame,
+        })
+        
+        -- Atualiza preview periodicamente
+        xSpawn(function()
+            while wait(2) do
+                if not previewLabel.Parent then break end
+                
+                local db = Catalog.GetDatabase()
+                local preview = "RESUMO DO CATALOGO:\n\n"
+                
+                -- Contagem por categoria
+                local totalRemotes = 0
+                for _, method in pairs(db.Remotes) do
+                    for _ in pairs(method) do totalRemotes = totalRemotes + 1 end
+                end
+                
+                preview = preview .. string.format("Total Remotes Unicos: %d\n", totalRemotes)
+                
+                for method, remotes in pairs(db.Remotes) do
+                    for name, data in pairs(remotes) do
+                        preview = preview .. string.format("  [%s] %s (%d calls)\n", 
+                            method, name, data.meta.callCount)
+                        
+                        -- Mostra categorias detectadas
+                        local cats = {}
+                        for cat, count in pairs(data.meta.categories) do
+                            table.insert(cats, cat)
+                        end
+                        if #cats > 0 then
+                            preview = preview .. "    Categorias: " .. table.concat(cats, ", ") .. "\n"
+                        end
+                    end
+                end
+                
+                preview = preview .. "\n"
+                
+                -- Instancias
+                for cat, items in pairs(db.Instances) do
+                    if #items > 0 then
+                        preview = preview .. string.format("[%s]: %d items\n", cat, #items)
+                    end
+                end
+                
+                -- Locais
+                local totalLocs = 0
+                for _, locs in pairs(db.Locations) do
+                    totalLocs = totalLocs + #locs
+                end
+                if totalLocs > 0 then
+                    preview = preview .. string.format("\n[Locais]: %d registrados\n", totalLocs)
+                end
+                
+                -- NPCs
+                if #db.NPCs.Enemies > 0 then
+                    preview = preview .. string.format("\n[NPCs Inimigos]: %d\n", #db.NPCs.Enemies)
+                    for i, npc in ipairs(db.NPCs.Enemies) do
+                        if i > 3 then preview = preview .. "  ...\n"; break end
+                        preview = preview .. string.format("  - %s (HP: %d)\n", npc.name, npc.health)
+                    end
+                end
+                
+                previewLabel.Text = preview
+            end
+        end)
+    end
+    
+    function UI.Create()
+        local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+        local old = playerGui:FindFirstChild("EZZ_CATALOG_UI")
+        if old then old:Destroy() end
+        
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "EZZ_CATALOG_UI"
+        screenGui.ResetOnSpawn = false
+        screenGui.DisplayOrder = 999999
+        screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        screenGui.Parent = playerGui
+        State.screenGui = screenGui
+        
+        local mainFrame = Instance.new("Frame")
+        mainFrame.Name = "MainFrame"
+        mainFrame.Size = UDim2.new(0, 500, 0, 600)
+        mainFrame.Position = UDim2.new(0, 50, 0, 50)
+        mainFrame.BackgroundColor3 = Theme.Background
+        mainFrame.BorderSizePixel = 0
+        mainFrame.Active = true
+        mainFrame.Parent = screenGui
+        State.mainFrame = mainFrame
+        CreateCorner(mainFrame, 12)
+        
+        -- Header
+        local header = Instance.new("Frame")
+        header.Name = "Header"
+        header.Size = UDim2.new(1, 0, 0, 45)
+        header.BackgroundColor3 = Theme.BackgroundSecondary
+        header.BorderSizePixel = 0
+        header.Parent = mainFrame
+        CreateCorner(header, 12)
+        
+        CreateLabel({
+            Name = "Title",
+            Text = "   EZZ HUB CATALOG v7.0",
+            Size = UDim2.new(1, -150, 1, 0),
+            TextColor3 = Theme.Primary,
+            Font = Enum.Font.GothamBold,
+            TextSize = 18,
+            Parent = header,
+        })
+        
+        local btnMinimize = CreateButton({
+            Name = "Minimize",
+            Text = "-",
+            Size = UDim2.new(0, 40, 0, 40),
+            Position = UDim2.new(1, -90, 0, 5),
+            BackgroundColor = Theme.BackgroundTertiary,
+            CornerRadius = 8,
+            Parent = header,
+        })
+        
+        local btnClose = CreateButton({
+            Name = "Close",
+            Text = "x",
+            Size = UDim2.new(0, 40, 0, 40),
+            Position = UDim2.new(1, -45, 0, 5),
+            BackgroundColor = Theme.Error,
+            CornerRadius = 8,
+            Parent = header,
+        })
+        
+        -- Sidebar
+        local sidebar = Instance.new("Frame")
+        sidebar.Name = "Sidebar"
+        sidebar.Size = UDim2.new(0, 130, 1, -45)
+        sidebar.Position = UDim2.new(0, 0, 0, 45)
+        sidebar.BackgroundColor3 = Theme.BackgroundSecondary
+        sidebar.BorderSizePixel = 0
+        sidebar.Parent = mainFrame
+        
+        local tabs = {
+            {Name = "Capture"},
+            {Name = "Export"},
+        }
+        
+        local tabButtons = {}
+        local tabContents = {}
+        
+        for i, tab in ipairs(tabs) do
+            local btn = CreateButton({
+                Name = tab.Name .. "Tab",
+                Text = "  " .. tab.Name,
+                Size = UDim2.new(1, -10, 0, 40),
+                Position = UDim2.new(0, 5, 0, 15 + (i-1) * 50),
+                BackgroundColor = i == 1 and Theme.Primary or Theme.BackgroundTertiary,
+                TextColor = i == 1 and Theme.TextPrimary or Theme.TextSecondary,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                CornerRadius = 8,
+                Parent = sidebar,
+            })
+            tabButtons[tab.Name] = btn
+            
+            local content = Instance.new("Frame")
+            content.Name = tab.Name .. "Content"
+            content.Size = UDim2.new(1, -130, 1, -45)
+            content.Position = UDim2.new(0, 130, 0, 45)
+            content.BackgroundTransparency = 1
+            content.Visible = (i == 1)
+            content.Parent = mainFrame
+            tabContents[tab.Name] = content
+            
+            btn.MouseButton1Click:Connect(function()
+                for name, button in pairs(tabButtons) do
+                    Tween(button, {BackgroundColor3 = Theme.BackgroundTertiary}, 0.15)
+                    button.TextColor3 = Theme.TextSecondary
+                    tabContents[name].Visible = false
+                end
+                Tween(btn, {BackgroundColor3 = Theme.Primary}, 0.15)
+                btn.TextColor3 = Theme.TextPrimary
+                content.Visible = true
+                State.currentTab = tab.Name
+            end)
+        end
+        
+        -- Drag
+        local dragging = false
+        local dragStart, startPos
+        
+        header.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true
+                dragStart = input.Position
+                startPos = mainFrame.Position
+            end
+        end)
+        
+        header.InputChanged:Connect(function(input)
+            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                local delta = input.Position - dragStart
+                mainFrame.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + delta.X,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+        
+        header.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+            end
+        end)
+        
+        -- Controls
+        local isMinimized = false
+        btnMinimize.MouseButton1Click:Connect(function()
+            isMinimized = not isMinimized
+            if isMinimized then
+                Tween(mainFrame, {Size = UDim2.new(0, 500, 0, 45)}, 0.3)
+                sidebar.Visible = false
+                for _, c in pairs(tabContents) do c.Visible = false end
+                btnMinimize.Text = "+"
+            else
+                Tween(mainFrame, {Size = UDim2.new(0, 500, 0, 600)}, 0.3)
+                xDelay(0.3, function()
+                    sidebar.Visible = true
+                    tabContents[State.currentTab].Visible = true
+                end)
+                btnMinimize.Text = "-"
+            end
+        end)
+        
+        btnClose.MouseButton1Click:Connect(function()
+            Tween(mainFrame, {Size = UDim2.new(0, 0, 0, 0)}, 0.3)
+            xDelay(0.3, function() screenGui.Enabled = false end)
+        end)
+        
+        -- Setup content
+        SetupCaptureTab(tabContents.Capture)
+        SetupExportTab(tabContents.Export)
+        
+        -- Animate in
+        mainFrame.Size = UDim2.new(0, 0, 0, 0)
+        Tween(mainFrame, {Size = UDim2.new(0, 500, 0, 600)}, 0.5, Enum.EasingStyle.Back)
+        
+        return UI
+    end
+    
+    function UI.Toggle()
+        State.isVisible = not State.isVisible
+        if State.screenGui then State.screenGui.Enabled = State.isVisible end
+    end
+end
+
+-- ============================================================
+-- LOGGER SIMPLE
+-- ============================================================
+local Logger = {}
+do
+    function Logger:Log(level, msg)
+        print(string.format("[EZZ][%s][%s] %s", os.date("%H:%M:%S"), level, msg))
+    end
+    function Logger:Info(msg) self:Log("INFO", msg) end
+    function Logger:Success(msg) self:Log("SUCCESS", msg) end
+    function Logger:Warning(msg) self:Log("WARNING", msg) end
+    function Logger:Error(msg) self:Log("ERROR", msg) end
+end
+
+-- ============================================================
+-- INICIALIZACAO
+-- ============================================================
+local EZZ = {
+    Version = "7.0 CATALOG",
+    Creator = "DragonSCPOFICIAL",
+}
+
+function EZZ.Start()
+    Logger:Info("========================================")
+    Logger:Info("EZZ HUB CATALOG v7.0")
+    Logger:Info("Sistema de catalogacao inteligente")
+    Logger:Info("Captura SEM parar o jogo")
+    Logger:Info("========================================")
+    
+    -- Cria UI
+    xSpawn(function()
+        UI.Create()
+    end)
+    
+    -- Keybinds
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if input.KeyCode == Enum.KeyCode.Insert then
+            UI.Toggle()
+        elseif input.KeyCode == Enum.KeyCode.F5 then
+            -- Atalho rapido para toggle captura
+            if PassiveCapture.IsRunning() then
+                PassiveCapture.Stop()
+            else
+                PassiveCapture.Start()
+            end
+        end
+    end)
+    
+    -- Notificacao
+    xDelay(2, function()
+        pcall(function()
+            StarterGui:SetCore("SendNotification", {
+                Title = "EZZ CATALOG v7.0",
+                Text = "Carregado!\nInsert = UI | F5 = Toggle Captura\nNao interfere no jogo!",
+                Duration = 5,
+            })
+        end)
+    end)
+    
+    Logger:Success("EZZ CATALOG iniciado!")
+end
+
+EZZ.Start()
+return EZZ
