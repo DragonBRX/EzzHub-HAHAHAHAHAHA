@@ -1,19 +1,3 @@
---[[
-    ╔══════════════════════════════════════════════════════════════════════════════╗
-    ║                     EZZ HUB v8.0 - ULTIMATE EDITION                          ║
-    ║                     "Captura Tudo. Encontra Tudo."                           ║
-    ║                                                                              ║
-    ║  Sistema modular de captura e inteligência de jogos Roblox                   ║
-    ║  - Detecção automática de Game ID e ambiente                                 ║
-    ║  Menu de captura ao vivo por categoria (uma por vez)                         ║
-    ║  - Pesquisa inteligente global (Remotes, Objetos, Scripts, Valores)          ║
-    ║  - Catalogação completa: NPCs, Objetos, Coordenadas, Servidor                ║
-    ║                                                                              ║
-    ║  Criador: DragonSCPOFICIAL                                                   ║
-    ║  Versão: 8.0 ULTIMATE                                                        ║
-    ╚══════════════════════════════════════════════════════════════════════════════╝
-]]
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
