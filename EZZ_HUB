@@ -6,6 +6,7 @@ local StarterGui = game:GetService("StarterGui")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local CollectionService = game:GetService("CollectionService")
+local MarketplaceService = game:GetService("MarketplaceService")
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 
@@ -24,6 +25,8 @@ local Config = {
     MaxCapturedCodeChars = 120000,
     MaxScriptPreviewChars = 900,
     EnableScriptSourceRead = true,
+    ScriptSaveRootFolder = "EZZ_CapturedCodes",
+    SaveScriptManifest = true,
     MaxRemoteArgDepth = 5,
     MaxRemoteTreeItems = 20,
     MaxRemoteContextValues = 30,
@@ -69,7 +72,7 @@ local RecordingData = {
         StartTime = os.time(),
         PlaceId = game.PlaceId,
         PlayerName = LocalPlayer.Name,
-        Version = "3.1-CODE-CAPTURE-DIRECT-SOURCE"
+        Version = "3.2-CODE-CAPTURE-SAVE-FOLDER"
     },
     GameStates = {
         MainMenu = { Captured = false, ImportantButtons = {}, KeyElements = {} },
@@ -336,6 +339,7 @@ local Colors = {
 -- Declaracoes antecipadas usadas pela UI
 local ScanScripts
 local RefreshScriptPanel
+local SaveCapturedScriptsToFiles
 
 -- -----------------------------------------------------------
 -- INTERFACE REDESENHADA
@@ -717,7 +721,7 @@ local function CreateUI()
     local scriptsBtn = Instance.new("TextButton")
     scriptsBtn.Size = UDim2.new(1, 0, 1, 0)
     scriptsBtn.BackgroundColor3 = Color3.fromRGB(30, 12, 60)
-    scriptsBtn.Text = "SCRIPTS (0)"
+    scriptsBtn.Text = "CODIGOS (0)"
     scriptsBtn.TextColor3 = Color3.fromRGB(180, 100, 255)
     scriptsBtn.Font = Enum.Font.GothamBold
     scriptsBtn.TextSize = 11
@@ -781,7 +785,7 @@ local function CreateUI()
     spTitle.Size = UDim2.new(1, -80, 1, 0)
     spTitle.Position = UDim2.new(0, 12, 0, 0)
     spTitle.BackgroundTransparency = 1
-    spTitle.Text = "SCRIPTS CAPTURADOS"
+    spTitle.Text = "CODIGOS CAPTURADOS"
     spTitle.TextColor3 = Color3.fromRGB(180, 100, 255)
     spTitle.Font = Enum.Font.GothamBold
     spTitle.TextSize = 11
@@ -804,10 +808,10 @@ local function CreateUI()
 
     -- Botao SCAN dentro do painel
     local spScanBtn = Instance.new("TextButton")
-    spScanBtn.Size = UDim2.new(1, -10, 0, 28)
+    spScanBtn.Size = UDim2.new(0.5, -8, 0, 28)
     spScanBtn.Position = UDim2.new(0, 5, 0, 38)
     spScanBtn.BackgroundColor3 = Color3.fromRGB(30, 12, 60)
-    spScanBtn.Text = "▶ SCAN SCRIPTS"
+    spScanBtn.Text = "▶ CAPTURAR CODIGOS"
     spScanBtn.TextColor3 = Color3.fromRGB(200, 140, 255)
     spScanBtn.Font = Enum.Font.GothamBold
     spScanBtn.TextSize = 10
@@ -820,12 +824,60 @@ local function CreateUI()
     spScanStroke.Thickness = 1
     spScanStroke.Transparency = 0.5
 
+    -- Botao SALVAR CODIGOS dentro do painel
+    local spSaveBtn = Instance.new("TextButton")
+    spSaveBtn.Size = UDim2.new(0.5, -7, 0, 28)
+    spSaveBtn.Position = UDim2.new(0.5, 2, 0, 38)
+    spSaveBtn.BackgroundColor3 = Color3.fromRGB(10, 30, 70)
+    spSaveBtn.Text = "💾 SALVAR CODIGOS"
+    spSaveBtn.TextColor3 = Color3.fromRGB(80, 160, 255)
+    spSaveBtn.Font = Enum.Font.GothamBold
+    spSaveBtn.TextSize = 9
+    spSaveBtn.BorderSizePixel = 0
+    spSaveBtn.ZIndex = 52
+    spSaveBtn.Parent = scriptPanel
+    Instance.new("UICorner", spSaveBtn).CornerRadius = UDim.new(0, 6)
+    local spSaveStroke = Instance.new("UIStroke", spSaveBtn)
+    spSaveStroke.Color = Color3.fromRGB(80, 160, 255)
+    spSaveStroke.Thickness = 1
+    spSaveStroke.Transparency = 0.5
+
+    SafeConnect(spSaveBtn.MouseButton1Click, function()
+        if not SaveCapturedScriptsToFiles then
+            spSaveBtn.Text = "ERRO FUNCAO"
+            task.wait(1.5)
+            spSaveBtn.Text = "💾 SALVAR CODIGOS"
+            return
+        end
+
+        if #RecordingData.Interactions.CapturedScripts == 0 and ScanScripts then
+            spSaveBtn.Text = "CAPTURANDO..."
+            ScanScripts()
+            if RefreshScriptPanel then RefreshScriptPanel() end
+        end
+
+        spSaveBtn.Text = "SALVANDO..."
+        local ok, result = pcall(SaveCapturedScriptsToFiles)
+        if ok and result and result.Ok then
+            spSaveBtn.Text = "SALVO: " .. tostring(result.SavedCount)
+            Log("[SCRIPTS] Pasta salva: " .. tostring(result.Folder))
+        elseif ok and result then
+            spSaveBtn.Text = "NAO SALVOU"
+            Log("[SCRIPTS] Falha ao salvar: " .. tostring(result.Error))
+        else
+            spSaveBtn.Text = "ERRO"
+            Log("[SCRIPTS] Erro ao salvar: " .. tostring(result))
+        end
+        task.wait(1.8)
+        spSaveBtn.Text = "💾 SALVAR CODIGOS"
+    end)
+
     SafeConnect(spScanBtn.MouseButton1Click, function()
         spScanBtn.Text = "Varrendo..."
         ScanScripts()
         RefreshScriptPanel()
-        spScanBtn.Text = "▶ SCAN SCRIPTS"
-        scriptsBtn.Text = "SCRIPTS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
+        spScanBtn.Text = "▶ CAPTURAR CODIGOS"
+        scriptsBtn.Text = "CODIGOS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
     end)
 
     -- ScrollFrame de lista
@@ -867,7 +919,7 @@ local function CreateUI()
             local emptyLabel = Instance.new("TextLabel")
             emptyLabel.Size = UDim2.new(1, -10, 0, 40)
             emptyLabel.BackgroundTransparency = 1
-            emptyLabel.Text = "Nenhum script capturado ainda.\nUse o botao SCAN SCRIPTS."
+            emptyLabel.Text = "Nenhum script capturado ainda.\nUse CAPTURAR CODIGOS."
             emptyLabel.TextColor3 = Colors.TextSec
             emptyLabel.Font = Enum.Font.Gotham
             emptyLabel.TextSize = 10
@@ -1012,33 +1064,7 @@ local function CreateUI()
             previewLabel.Parent = card
             Instance.new("UICorner", previewLabel).CornerRadius = UDim.new(0, 4)
 
-            local copyCodeBtn = Instance.new("TextButton")
-            copyCodeBtn.Size = UDim2.new(0, 58, 0, 16)
-            copyCodeBtn.Position = UDim2.new(1, -66, 0, 38)
-            copyCodeBtn.BackgroundColor3 = Color3.fromRGB(10, 60, 35)
-            copyCodeBtn.Text = "COPIAR"
-            copyCodeBtn.TextColor3 = Colors.Green
-            copyCodeBtn.Font = Enum.Font.GothamBold
-            copyCodeBtn.TextSize = 8
-            copyCodeBtn.BorderSizePixel = 0
-            copyCodeBtn.ZIndex = 54
-            copyCodeBtn.Parent = card
-            Instance.new("UICorner", copyCodeBtn).CornerRadius = UDim.new(0, 4)
-
-            SafeConnect(copyCodeBtn.MouseButton1Click, function()
-                local codeToCopy = entry.Code or entry.RawCode or entry.Note or ""
-                if setclipboard then
-                    setclipboard(codeToCopy)
-                    copyCodeBtn.Text = "OK"
-                    task.wait(1)
-                    copyCodeBtn.Text = "COPIAR"
-                else
-                    print(codeToCopy)
-                    copyCodeBtn.Text = "PRINT"
-                    task.wait(1)
-                    copyCodeBtn.Text = "COPIAR"
-                end
-            end)
+            -- Copia individual removida: os codigos agora sao salvos em arquivos .lua pelo botao SALVAR CODIGOS.
 
             -- Timestamp + source
             local timeLabel = Instance.new("TextLabel")
@@ -1061,9 +1087,9 @@ local function CreateUI()
         scriptPanel.Visible = not scriptPanel.Visible
         if scriptPanel.Visible then
             RefreshScriptPanel()
-            scriptsBtn.Text = "SCRIPTS ▲ FECHAR"
+            scriptsBtn.Text = "CODIGOS ▲ FECHAR"
         else
-            scriptsBtn.Text = "SCRIPTS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
+            scriptsBtn.Text = "CODIGOS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
         end
     end)
 
@@ -2596,6 +2622,222 @@ ScanScripts = function()
     return results
 end
 
+local function SanitizeFileName(value)
+    local text = tostring(value or "")
+    text = text:gsub("[%z%c]", "")
+    text = text:gsub("[<>:\"/\\|%?%*]", "_")
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+    text = text:gsub("%s+", " ")
+    if text == "" then text = "sem_nome" end
+    if #text > 80 then text = text:sub(1, 80) end
+    return text
+end
+
+local function SplitPath(path)
+    local parts = {}
+    for part in tostring(path or ""):gmatch("[^%.]+") do
+        table.insert(parts, part)
+    end
+    return parts
+end
+
+local function EnsureFolder(path)
+    if not makefolder then
+        return false, "makefolder indisponivel neste executor"
+    end
+    local current = ""
+    for part in tostring(path):gmatch("[^/]+") do
+        current = current == "" and part or (current .. "/" .. part)
+        local ok = pcall(function()
+            if isfolder then
+                if not isfolder(current) then
+                    makefolder(current)
+                end
+            else
+                -- Sem isfolder, tenta criar e ignora erro de pasta ja existente.
+                pcall(function()
+                    makefolder(current)
+                end)
+            end
+        end)
+        if not ok then
+            return false, "falha ao criar pasta: " .. current
+        end
+    end
+    return true
+end
+
+local function GetSafeGameName()
+    local name = nil
+    pcall(function()
+        local info = MarketplaceService:GetProductInfo(game.PlaceId)
+        if info and type(info.Name) == "string" and info.Name ~= "" then
+            name = info.Name
+        end
+    end)
+    if not name or name == "" then
+        pcall(function() name = game.Name end)
+    end
+    if not name or name == "" then
+        name = "Place_" .. tostring(game.PlaceId)
+    end
+    return SanitizeFileName(name)
+end
+
+local function GetScriptExtension(className)
+    if className == "LocalScript" then return ".client.lua" end
+    if className == "ModuleScript" then return ".module.lua" end
+    if className == "Script" then return ".server.lua" end
+    return ".lua"
+end
+
+local function BuildScriptFilePath(baseFolder, entry, usedPaths)
+    local parts = SplitPath(entry.Path or entry.Name or ("script_" .. tostring(entry.ID)))
+    local folder = baseFolder
+
+    if #parts > 1 then
+        for i = 1, #parts - 1 do
+            folder = folder .. "/" .. SanitizeFileName(parts[i])
+        end
+    else
+        folder = folder .. "/SemPasta"
+    end
+
+    local ok, err = EnsureFolder(folder)
+    if not ok then return nil, err end
+
+    local baseName = SanitizeFileName(entry.Name or parts[#parts] or ("script_" .. tostring(entry.ID)))
+    local extension = GetScriptExtension(entry.ClassName)
+    local filePath = folder .. "/" .. baseName .. extension
+
+    if usedPaths[filePath] then
+        filePath = folder .. "/" .. baseName .. "_" .. tostring(entry.ID or usedPaths[filePath] + 1) .. extension
+    end
+    usedPaths[filePath] = true
+    return filePath
+end
+
+SaveCapturedScriptsToFiles = function()
+    if not writefile then
+        return { Ok = false, Error = "writefile indisponivel neste executor" }
+    end
+
+    local scripts = RecordingData.Interactions.CapturedScripts or {}
+    if #scripts == 0 then
+        return { Ok = false, Error = "nenhum codigo capturado" }
+    end
+
+    local stamp = os.date("%Y%m%d_%H%M%S")
+    local gameName = GetSafeGameName()
+    local baseFolder = tostring(Config.ScriptSaveRootFolder or "EZZ_CapturedCodes") .. "/" .. gameName .. "_" .. tostring(game.PlaceId) .. "_" .. stamp
+    local okFolder, errFolder = EnsureFolder(baseFolder)
+    if not okFolder then
+        return { Ok = false, Error = errFolder }
+    end
+
+    local manifest = {
+        GameName = gameName,
+        PlaceId = game.PlaceId,
+        PlayerName = LocalPlayer.Name,
+        SavedAt = os.date("%Y-%m-%d %H:%M:%S"),
+        Folder = baseFolder,
+        TotalCaptured = #scripts,
+        TotalSaved = 0,
+        TotalMetadataOnly = 0,
+        Files = {},
+    }
+
+    local usedPaths = {}
+
+    for _, entry in ipairs(scripts) do
+        local code = entry.Code
+        local savedRawFallback = false
+        if (type(code) ~= "string" or code == "") and type(entry.RawCode) == "string" and entry.RawCode ~= "" then
+            code = entry.RawCode
+            savedRawFallback = true
+        end
+        if type(code) == "string" and code ~= "" then
+            local filePath, fileErr = BuildScriptFilePath(baseFolder, entry, usedPaths)
+            if filePath then
+                local okWrite, writeErr = pcall(function()
+                    writefile(filePath, code)
+                end)
+                if okWrite then
+                    manifest.TotalSaved = manifest.TotalSaved + 1
+                    table.insert(manifest.Files, {
+                        ID = entry.ID,
+                        Name = entry.Name,
+                        ClassName = entry.ClassName,
+                        Path = entry.Path,
+                        Source = entry.Source,
+                        File = filePath,
+                        SourceReadable = entry.SourceReadable,
+                        DecodeMethod = entry.DecodeMethod,
+                        Encrypted = entry.Encrypted,
+                        CodeLength = entry.CodeLength,
+                        CodeTruncated = entry.CodeTruncated,
+                        SavedRawFallback = savedRawFallback,
+                        SuspiciousFlags = entry.SuspiciousFlags,
+                    })
+                else
+                    table.insert(manifest.Files, {
+                        ID = entry.ID,
+                        Name = entry.Name,
+                        Path = entry.Path,
+                        Error = tostring(writeErr),
+                    })
+                end
+            else
+                table.insert(manifest.Files, {
+                    ID = entry.ID,
+                    Name = entry.Name,
+                    Path = entry.Path,
+                    Error = tostring(fileErr),
+                })
+            end
+        else
+            manifest.TotalMetadataOnly = manifest.TotalMetadataOnly + 1
+            table.insert(manifest.Files, {
+                ID = entry.ID,
+                Name = entry.Name,
+                ClassName = entry.ClassName,
+                Path = entry.Path,
+                Source = entry.Source,
+                SourceReadable = entry.SourceReadable,
+                SourceReadStatus = entry.SourceReadStatus,
+                Note = entry.Note,
+                MetadataOnly = true,
+            })
+        end
+    end
+
+    local manifestPath = baseFolder .. "/manifest.json"
+    pcall(function()
+        writefile(manifestPath, HttpService:JSONEncode(manifest))
+    end)
+
+    local capturedJsonPath = baseFolder .. "/captured_codes_full.json"
+    pcall(function()
+        writefile(capturedJsonPath, HttpService:JSONEncode(scripts))
+    end)
+
+    AddToTimeline("SCRIPT_SAVE_FILES", {
+        Folder = baseFolder,
+        Saved = manifest.TotalSaved,
+        MetadataOnly = manifest.TotalMetadataOnly,
+    })
+
+    return {
+        Ok = manifest.TotalSaved > 0,
+        Folder = baseFolder,
+        Manifest = manifestPath,
+        FullJson = capturedJsonPath,
+        SavedCount = manifest.TotalSaved,
+        MetadataOnly = manifest.TotalMetadataOnly,
+        Error = manifest.TotalSaved > 0 and nil or "nenhum codigo com Source legivel para salvar",
+    }
+end
+
 -- -----------------------------------------------------------
 -- MONITORAR CLIQUES
 -- -----------------------------------------------------------
@@ -2828,7 +3070,7 @@ local function UpdateUI()
     -- Sincroniza label do botao de scripts
     if DebugUI.scriptsBtn and not DebugUI.scriptPanel.Visible then
         local scriptCount = #RecordingData.Interactions.CapturedScripts
-        DebugUI.scriptsBtn.Text = "SCRIPTS (" .. tostring(scriptCount) .. ")"
+        DebugUI.scriptsBtn.Text = "CODIGOS (" .. tostring(scriptCount) .. ")"
     end
     if DebugUI.spCount then
         DebugUI.spCount.Text = tostring(#RecordingData.Interactions.CapturedScripts) .. " scripts"
