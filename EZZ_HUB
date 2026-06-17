@@ -352,7 +352,6 @@ local function CreateUI()
         gui.EZZ_Compact:Destroy()
     end
 
-    -- Screen
     local screen = Instance.new("ScreenGui")
     screen.Name = "EZZ_Compact"
     screen.ResetOnSpawn = false
@@ -360,45 +359,30 @@ local function CreateUI()
     screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     screen.Parent = gui
 
-    -- -- Painel principal ----------------------------------
     local frame = Instance.new("Frame")
     frame.Name = "MainFrame"
-    frame.Size = UDim2.new(0, 270, 0, 350)
+    frame.Size = UDim2.new(0, 286, 0, 390)
     frame.Position = UDim2.new(0, 14, 0, 14)
     frame.BackgroundColor3 = Colors.BG
     frame.BorderSizePixel = 0
     frame.Active = true
     frame.Draggable = true
     frame.Parent = screen
-
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
 
-    -- Borda neon
     local stroke = Instance.new("UIStroke", frame)
     stroke.Color = Colors.Border
     stroke.Thickness = 1.5
     stroke.Transparency = 0.3
 
-    -- Sombra (simulada com frame menor por baixo)
-    local shadow = Instance.new("Frame")
-    shadow.Size = UDim2.new(1, 8, 1, 8)
-    shadow.Position = UDim2.new(0, -4, 0, 4)
-    shadow.BackgroundColor3 = Colors.Border
-    shadow.BackgroundTransparency = 0.88
-    shadow.BorderSizePixel = 0
-    shadow.ZIndex = frame.ZIndex - 1
-    shadow.Parent = frame
-    Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 14)
-
-    -- -- Header --------------------------------------------
     local header = Instance.new("Frame")
+    header.Name = "Header"
     header.Size = UDim2.new(1, 0, 0, 40)
     header.BackgroundColor3 = Colors.Surface
     header.BorderSizePixel = 0
     header.Parent = frame
     Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
 
-    -- Arredonda so o topo
     local headerBottom = Instance.new("Frame")
     headerBottom.Size = UDim2.new(1, 0, 0, 12)
     headerBottom.Position = UDim2.new(0, 0, 1, -12)
@@ -406,7 +390,6 @@ local function CreateUI()
     headerBottom.BorderSizePixel = 0
     headerBottom.Parent = header
 
-    -- Ponto vermelho pulsante
     local dot = Instance.new("Frame")
     dot.Size = UDim2.new(0, 8, 0, 8)
     dot.Position = UDim2.new(0, 14, 0.5, -4)
@@ -415,23 +398,17 @@ local function CreateUI()
     dot.Parent = header
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
-    -- Animacao de pulso no dot
     task.spawn(function()
         while dot and dot.Parent do
-            TweenService:Create(dot, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
-                BackgroundTransparency = 0.7
-            }):Play()
+            TweenService:Create(dot, TweenInfo.new(0.7, Enum.EasingStyle.Sine), { BackgroundTransparency = 0.7 }):Play()
             task.wait(0.7)
-            TweenService:Create(dot, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
-                BackgroundTransparency = 0
-            }):Play()
+            TweenService:Create(dot, TweenInfo.new(0.7, Enum.EasingStyle.Sine), { BackgroundTransparency = 0 }):Play()
             task.wait(0.7)
         end
     end)
 
-    -- Titulo
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -30, 1, 0)
+    title.Size = UDim2.new(1, -80, 1, 0)
     title.Position = UDim2.new(0, 28, 0, 0)
     title.BackgroundTransparency = 1
     title.Text = "EZZ HUB"
@@ -441,10 +418,9 @@ local function CreateUI()
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = header
 
-    -- Versao (badge)
     local verBadge = Instance.new("Frame")
-    verBadge.Size = UDim2.new(0, 52, 0, 18)
-    verBadge.Position = UDim2.new(1, -62, 0.5, -9)
+    verBadge.Size = UDim2.new(0, 58, 0, 18)
+    verBadge.Position = UDim2.new(1, -68, 0.5, -9)
     verBadge.BackgroundColor3 = Colors.AccentDim
     verBadge.BorderSizePixel = 0
     verBadge.Parent = header
@@ -453,39 +429,107 @@ local function CreateUI()
     local verLabel = Instance.new("TextLabel")
     verLabel.Size = UDim2.new(1, 0, 1, 0)
     verLabel.BackgroundTransparency = 1
-    verLabel.Text = "v3.1"
+    verLabel.Text = "v3.3"
     verLabel.TextColor3 = Colors.Accent
     verLabel.Font = Enum.Font.GothamBold
     verLabel.TextSize = 10
     verLabel.Parent = verBadge
 
-    -- -- Estado atual --------------------------------------
+    -- Abas pequenas no topo: agora nao abre janela separada.
+    local tabs = Instance.new("Frame")
+    tabs.Name = "TopTabs"
+    tabs.Size = UDim2.new(1, -20, 0, 28)
+    tabs.Position = UDim2.new(0, 10, 0, 48)
+    tabs.BackgroundTransparency = 1
+    tabs.Parent = frame
+
+    local function MakeTab(name, text, xScale)
+        local btn = Instance.new("TextButton")
+        btn.Name = name
+        btn.Size = UDim2.new(0.5, -4, 1, 0)
+        btn.Position = UDim2.new(xScale, xScale == 0 and 0 or 4, 0, 0)
+        btn.BackgroundColor3 = Colors.StatBG
+        btn.Text = text
+        btn.TextColor3 = Colors.TextSec
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 10
+        btn.BorderSizePixel = 0
+        btn.Parent = tabs
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
+        local s = Instance.new("UIStroke", btn)
+        s.Color = Colors.TextMuted
+        s.Thickness = 1
+        s.Transparency = 0.55
+        return btn, s
+    end
+
+    local generalTab, generalTabStroke = MakeTab("GeneralTab", "GERAL", 0)
+    local codesTab, codesTabStroke = MakeTab("CodesTab", "CODIGOS", 0.5)
+
+    local generalPage = Instance.new("Frame")
+    generalPage.Name = "GeneralPage"
+    generalPage.Size = UDim2.new(1, -20, 1, -86)
+    generalPage.Position = UDim2.new(0, 10, 0, 82)
+    generalPage.BackgroundTransparency = 1
+    generalPage.Visible = true
+    generalPage.Parent = frame
+
+    local codesPage = Instance.new("Frame")
+    codesPage.Name = "CodesPage"
+    codesPage.Size = UDim2.new(1, -20, 1, -86)
+    codesPage.Position = UDim2.new(0, 10, 0, 82)
+    codesPage.BackgroundTransparency = 1
+    codesPage.Visible = false
+    codesPage.Parent = frame
+
+    local currentTab = "GERAL"
+    local function SetTab(tabName)
+        currentTab = tabName
+        local generalActive = tabName == "GERAL"
+        generalPage.Visible = generalActive
+        codesPage.Visible = not generalActive
+
+        generalTab.BackgroundColor3 = generalActive and Colors.AccentDim or Colors.StatBG
+        generalTab.TextColor3 = generalActive and Colors.Accent or Colors.TextSec
+        generalTabStroke.Color = generalActive and Colors.Accent or Colors.TextMuted
+        generalTabStroke.Transparency = generalActive and 0.25 or 0.55
+
+        codesTab.BackgroundColor3 = (not generalActive) and Color3.fromRGB(45, 18, 85) or Colors.StatBG
+        codesTab.TextColor3 = (not generalActive) and Color3.fromRGB(200, 140, 255) or Colors.TextSec
+        codesTabStroke.Color = (not generalActive) and Color3.fromRGB(180, 100, 255) or Colors.TextMuted
+        codesTabStroke.Transparency = (not generalActive) and 0.25 or 0.55
+    end
+
+    SafeConnect(generalTab.MouseButton1Click, function() SetTab("GERAL") end)
+    SafeConnect(codesTab.MouseButton1Click, function()
+        SetTab("CODIGOS")
+        if RefreshScriptPanel then RefreshScriptPanel() end
+    end)
+
+    -- Pagina GERAL ------------------------------------------------
     local stateBar = Instance.new("Frame")
-    stateBar.Size = UDim2.new(1, -20, 0, 26)
-    stateBar.Position = UDim2.new(0, 10, 0, 48)
+    stateBar.Size = UDim2.new(1, 0, 0, 26)
+    stateBar.Position = UDim2.new(0, 0, 0, 0)
     stateBar.BackgroundColor3 = Colors.StatBG
     stateBar.BorderSizePixel = 0
-    stateBar.Parent = frame
+    stateBar.Parent = generalPage
     Instance.new("UICorner", stateBar).CornerRadius = UDim.new(0, 6)
 
     local statePrefix = Instance.new("TextLabel")
-    statePrefix.Size = UDim2.new(0, 60, 1, 0)
+    statePrefix.Size = UDim2.new(0, 62, 1, 0)
     statePrefix.BackgroundTransparency = 1
     statePrefix.Text = "ESTADO"
     statePrefix.TextColor3 = Colors.TextMuted
     statePrefix.Font = Enum.Font.GothamBold
     statePrefix.TextSize = 9
     statePrefix.TextXAlignment = Enum.TextXAlignment.Left
-    statePrefix.Visible = true
-    -- padding
-    local sp = Instance.new("UIPadding", statePrefix)
-    sp.PaddingLeft = UDim.new(0, 8)
     statePrefix.Parent = stateBar
+    Instance.new("UIPadding", statePrefix).PaddingLeft = UDim.new(0, 8)
 
     local stateVal = Instance.new("TextLabel")
     stateVal.Name = "StateVal"
-    stateVal.Size = UDim2.new(1, -68, 1, 0)
-    stateVal.Position = UDim2.new(0, 60, 0, 0)
+    stateVal.Size = UDim2.new(1, -70, 1, 0)
+    stateVal.Position = UDim2.new(0, 64, 0, 0)
     stateVal.BackgroundTransparency = 1
     stateVal.Text = "DETECTANDO"
     stateVal.TextColor3 = Colors.Accent
@@ -494,22 +538,21 @@ local function CreateUI()
     stateVal.TextXAlignment = Enum.TextXAlignment.Left
     stateVal.Parent = stateBar
 
-    -- -- Stats (grid 2x2) ----------------------------------
     local statsGrid = Instance.new("Frame")
-    statsGrid.Size = UDim2.new(1, -20, 0, 60)
-    statsGrid.Position = UDim2.new(0, 10, 0, 86)
+    statsGrid.Size = UDim2.new(1, 0, 0, 68)
+    statsGrid.Position = UDim2.new(0, 0, 0, 38)
     statsGrid.BackgroundTransparency = 1
-    statsGrid.Parent = frame
+    statsGrid.Parent = generalPage
 
     local statsLayout = Instance.new("UIGridLayout", statsGrid)
-    statsLayout.CellSize = UDim2.new(0.5, -4, 1, -4)
+    statsLayout.CellSize = UDim2.new(0.5, -4, 0, 30)
     statsLayout.CellPadding = UDim2.new(0, 8, 0, 8)
 
     local statDefs = {
         { icon = "#", label = "CLIQUES", key = "clicks" },
-        { icon = "@", label = "ALVOS",   key = "targets" },
+        { icon = "@", label = "ALVOS", key = "targets" },
         { icon = "~", label = "REMOTES", key = "remotes" },
-        { icon = ">", label = "TEMPO",   key = "time"    },
+        { icon = ">", label = "TEMPO", key = "time" },
     }
 
     local statLabels = {}
@@ -520,586 +563,332 @@ local function CreateUI()
         cell.Parent = statsGrid
         Instance.new("UICorner", cell).CornerRadius = UDim.new(0, 6)
 
-        local cellLabel = Instance.new("TextLabel")
-        cellLabel.Size = UDim2.new(1, 0, 0.45, 0)
-        cellLabel.Position = UDim2.new(0, 0, 0.05, 0)
-        cellLabel.BackgroundTransparency = 1
-        cellLabel.Text = def.icon .. " " .. def.label
-        cellLabel.TextColor3 = Colors.TextMuted
-        cellLabel.Font = Enum.Font.GothamBold
-        cellLabel.TextSize = 8
-        cellLabel.Parent = cell
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -8, 0, 12)
+        label.Position = UDim2.new(0, 4, 0, 3)
+        label.BackgroundTransparency = 1
+        label.Text = def.icon .. " " .. def.label
+        label.TextColor3 = Colors.TextMuted
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 8
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = cell
 
-        local cellValue = Instance.new("TextLabel")
-        cellValue.Name = def.key
-        cellValue.Size = UDim2.new(1, -8, 0.5, 0)
-        cellValue.Position = UDim2.new(0, 4, 0.45, 0)
-        cellValue.BackgroundTransparency = 1
-        cellValue.Text = "0"
-        cellValue.TextColor3 = Colors.TextPri
-        cellValue.Font = Enum.Font.GothamBold
-        cellValue.TextSize = 14
-        cellValue.TextXAlignment = Enum.TextXAlignment.Left
-        cellValue.Parent = cell
-
-        statLabels[def.key] = cellValue
+        local value = Instance.new("TextLabel")
+        value.Name = def.key
+        value.Size = UDim2.new(1, -8, 0, 15)
+        value.Position = UDim2.new(0, 4, 0, 14)
+        value.BackgroundTransparency = 1
+        value.Text = "0"
+        value.TextColor3 = Colors.TextPri
+        value.Font = Enum.Font.GothamBold
+        value.TextSize = 14
+        value.TextXAlignment = Enum.TextXAlignment.Left
+        value.Parent = cell
+        statLabels[def.key] = value
     end
 
-    -- -- Divisor -------------------------------------------
-    local divider = Instance.new("Frame")
-    divider.Size = UDim2.new(1, -20, 0, 1)
-    divider.Position = UDim2.new(0, 10, 0, 156)
-    divider.BackgroundColor3 = Colors.TextMuted
-    divider.BackgroundTransparency = 0.6
-    divider.BorderSizePixel = 0
-    divider.Parent = frame
+    local function MakeButton(parent, text, bg, fg, pos, size, fontSize)
+        local btn = Instance.new("TextButton")
+        btn.Size = size
+        btn.Position = pos
+        btn.BackgroundColor3 = bg
+        btn.Text = text
+        btn.TextColor3 = fg
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = fontSize or 11
+        btn.BorderSizePixel = 0
+        btn.Parent = parent
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        local s = Instance.new("UIStroke", btn)
+        s.Color = fg
+        s.Thickness = 1
+        s.Transparency = 0.5
+        return btn
+    end
 
-    -- -- Botoes --------------------------------------------
-    local btnContainer = Instance.new("Frame")
-    btnContainer.Size = UDim2.new(1, -20, 0, 46)
-    btnContainer.Position = UDim2.new(0, 10, 0, 166)
-    btnContainer.BackgroundTransparency = 1
-    btnContainer.Parent = frame
+    local captureBtn = MakeButton(generalPage, "CAPTURAR", Colors.OrangeDim, Colors.Orange, UDim2.new(0, 0, 0, 122), UDim2.new(0.5, -5, 0, 34), 11)
+    local copyBtn = MakeButton(generalPage, "COPIAR JSON", Colors.GreenDim, Colors.Green, UDim2.new(0.5, 5, 0, 122), UDim2.new(0.5, -5, 0, 34), 10)
+    local saveBtn = MakeButton(generalPage, "SALVAR JSON", Color3.fromRGB(10, 30, 70), Color3.fromRGB(80, 160, 255), UDim2.new(0, 0, 0, 166), UDim2.new(1, 0, 0, 34), 11)
 
-    local btnLayout = Instance.new("UIListLayout", btnContainer)
-    btnLayout.FillDirection = Enum.FillDirection.Horizontal
-    btnLayout.Padding = UDim.new(0, 8)
+    local generalHint = Instance.new("TextLabel")
+    generalHint.Size = UDim2.new(1, 0, 0, 36)
+    generalHint.Position = UDim2.new(0, 0, 0, 212)
+    generalHint.BackgroundTransparency = 1
+    generalHint.Text = "GERAL captura cliques, valores, objetos, remotes e salva o JSON completo."
+    generalHint.TextColor3 = Colors.TextSec
+    generalHint.Font = Enum.Font.Gotham
+    generalHint.TextSize = 9
+    generalHint.TextWrapped = true
+    generalHint.TextXAlignment = Enum.TextXAlignment.Left
+    generalHint.Parent = generalPage
 
-    -- Botao CAPTURAR
-    local captureBtn = Instance.new("TextButton")
-    captureBtn.Size = UDim2.new(0.48, 0, 0, 34)
-    captureBtn.BackgroundColor3 = Colors.OrangeDim
-    captureBtn.Text = "CAPTURAR"
-    captureBtn.TextColor3 = Colors.Orange
-    captureBtn.Font = Enum.Font.GothamBold
-    captureBtn.TextSize = 11
-    captureBtn.BorderSizePixel = 0
-    captureBtn.Parent = btnContainer
-    Instance.new("UICorner", captureBtn).CornerRadius = UDim.new(0, 8)
-
-    local capStroke = Instance.new("UIStroke", captureBtn)
-    capStroke.Color = Colors.Orange
-    capStroke.Thickness = 1
-    capStroke.Transparency = 0.5
-
-    -- Botao COPIAR
-    local copyBtn = Instance.new("TextButton")
-    copyBtn.Size = UDim2.new(0.48, 0, 0, 34)
-    copyBtn.BackgroundColor3 = Colors.GreenDim
-    copyBtn.Text = "COPIAR"
-    copyBtn.TextColor3 = Colors.Green
-    copyBtn.Font = Enum.Font.GothamBold
-    copyBtn.TextSize = 11
-    copyBtn.BorderSizePixel = 0
-    copyBtn.Parent = btnContainer
-    Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 8)
-
-    local copyStroke = Instance.new("UIStroke", copyBtn)
-    copyStroke.Color = Colors.Green
-    copyStroke.Thickness = 1
-    copyStroke.Transparency = 0.5
-
-    -- -- Hover nos botoes ----------------------------------
-    SafeConnect(captureBtn.MouseEnter, function()
-        TweenService:Create(captureBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(90, 50, 5)
-        }):Play()
-    end)
-    SafeConnect(captureBtn.MouseLeave, function()
-        TweenService:Create(captureBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Colors.OrangeDim
-        }):Play()
-    end)
-
-    SafeConnect(copyBtn.MouseEnter, function()
-        TweenService:Create(copyBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(10, 80, 45)
-        }):Play()
-    end)
-    SafeConnect(copyBtn.MouseLeave, function()
-        TweenService:Create(copyBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Colors.GreenDim
-        }):Play()
-    end)
-
-    -- -- Acoes dos botoes ----------------------------------
     SafeConnect(captureBtn.MouseButton1Click, function()
         CaptureCurrentState()
-        captureBtn.Text = "FEITO!"
-        TweenService:Create(captureBtn, TweenInfo.new(0.1), {
-            BackgroundColor3 = Color3.fromRGB(40, 80, 20)
-        }):Play()
-        task.wait(1.2)
+        captureBtn.Text = "FEITO"
+        task.wait(1.0)
         captureBtn.Text = "CAPTURAR"
-        TweenService:Create(captureBtn, TweenInfo.new(0.2), {
-            BackgroundColor3 = Colors.OrangeDim
-        }):Play()
     end)
 
     SafeConnect(copyBtn.MouseButton1Click, function()
         local json = ExportJSON()
         if setclipboard then
             setclipboard(json)
-            copyBtn.Text = "COPIADO!"
-            task.wait(2)
-            copyBtn.Text = "COPIAR"
+            copyBtn.Text = "COPIADO"
         else
-            copyBtn.Text = "Console"
-            task.wait(2)
-            copyBtn.Text = "COPIAR"
+            copyBtn.Text = "SEM CLIP"
         end
-    end)
-
-    -- -- Segunda linha de botoes ----------------------------
-    local btnContainer2 = Instance.new("Frame")
-    btnContainer2.Size = UDim2.new(1, -20, 0, 34)
-    btnContainer2.Position = UDim2.new(0, 10, 0, 220)
-    btnContainer2.BackgroundTransparency = 1
-    btnContainer2.Parent = frame
-
-    -- Botao SALVAR
-    local saveBtn = Instance.new("TextButton")
-    saveBtn.Size = UDim2.new(1, 0, 1, 0)
-    saveBtn.BackgroundColor3 = Color3.fromRGB(10, 30, 70)
-    saveBtn.Text = "SALVAR"
-    saveBtn.TextColor3 = Color3.fromRGB(80, 160, 255)
-    saveBtn.Font = Enum.Font.GothamBold
-    saveBtn.TextSize = 11
-    saveBtn.BorderSizePixel = 0
-    saveBtn.Parent = btnContainer2
-    Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 8)
-
-    local saveStroke = Instance.new("UIStroke", saveBtn)
-    saveStroke.Color = Color3.fromRGB(80, 160, 255)
-    saveStroke.Thickness = 1
-    saveStroke.Transparency = 0.5
-
-    SafeConnect(saveBtn.MouseEnter, function()
-        TweenService:Create(saveBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(15, 50, 110)
-        }):Play()
-    end)
-    SafeConnect(saveBtn.MouseLeave, function()
-        TweenService:Create(saveBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(10, 30, 70)
-        }):Play()
+        task.wait(1.4)
+        copyBtn.Text = "COPIAR JSON"
     end)
 
     SafeConnect(saveBtn.MouseButton1Click, function()
         local json = ExportJSON()
         local fileName = "ezz_" .. tostring(game.PlaceId) .. "_" .. os.date("%Y%m%d_%H%M%S") .. ".json"
-        local saved = false
-
         if writefile then
-            local ok, err = pcall(function()
-                writefile(fileName, json)
-            end)
+            local ok, err = pcall(function() writefile(fileName, json) end)
             if ok then
-                saved = true
-                saveBtn.Text = "SALVO!"
+                saveBtn.Text = "SALVO JSON"
                 Log("[OK] Arquivo salvo: " .. fileName)
             else
-                Log("[ERRO] Falha ao salvar: " .. tostring(err))
-                saveBtn.Text = "ERRO!"
+                saveBtn.Text = "ERRO JSON"
+                Log("[ERRO] Falha ao salvar JSON: " .. tostring(err))
             end
         else
-            saveBtn.Text = "SEM SUPORTE"
+            saveBtn.Text = "SEM WRITEFILE"
             Log("[WARN] writefile nao disponivel neste executor")
         end
-
-        task.wait(2)
-        saveBtn.Text = "SALVAR"
+        task.wait(1.6)
+        saveBtn.Text = "SALVAR JSON"
     end)
 
-    -- -- Terceira linha de botoes: SCRIPTS ------------------------
-    local btnContainer3 = Instance.new("Frame")
-    btnContainer3.Size = UDim2.new(1, -20, 0, 34)
-    btnContainer3.Position = UDim2.new(0, 10, 0, 262)
-    btnContainer3.BackgroundTransparency = 1
-    btnContainer3.Parent = frame
+    -- Pagina CODIGOS ---------------------------------------------
+    local codeStatus = Instance.new("Frame")
+    codeStatus.Name = "CodeStatus"
+    codeStatus.Size = UDim2.new(1, 0, 0, 32)
+    codeStatus.Position = UDim2.new(0, 0, 0, 0)
+    codeStatus.BackgroundColor3 = Colors.StatBG
+    codeStatus.BorderSizePixel = 0
+    codeStatus.Parent = codesPage
+    Instance.new("UICorner", codeStatus).CornerRadius = UDim.new(0, 6)
 
-    local scriptsBtn = Instance.new("TextButton")
-    scriptsBtn.Size = UDim2.new(1, 0, 1, 0)
-    scriptsBtn.BackgroundColor3 = Color3.fromRGB(30, 12, 60)
-    scriptsBtn.Text = "CODIGOS (0)"
-    scriptsBtn.TextColor3 = Color3.fromRGB(180, 100, 255)
-    scriptsBtn.Font = Enum.Font.GothamBold
-    scriptsBtn.TextSize = 11
-    scriptsBtn.BorderSizePixel = 0
-    scriptsBtn.Parent = btnContainer3
-    Instance.new("UICorner", scriptsBtn).CornerRadius = UDim.new(0, 8)
+    local codeCount = Instance.new("TextLabel")
+    codeCount.Name = "CodeCount"
+    codeCount.Size = UDim2.new(0.45, -8, 1, 0)
+    codeCount.Position = UDim2.new(0, 8, 0, 0)
+    codeCount.BackgroundTransparency = 1
+    codeCount.Text = "0 CODIGOS"
+    codeCount.TextColor3 = Color3.fromRGB(200, 140, 255)
+    codeCount.Font = Enum.Font.GothamBold
+    codeCount.TextSize = 10
+    codeCount.TextXAlignment = Enum.TextXAlignment.Left
+    codeCount.Parent = codeStatus
 
-    local scriptsStroke = Instance.new("UIStroke", scriptsBtn)
-    scriptsStroke.Color = Color3.fromRGB(180, 100, 255)
-    scriptsStroke.Thickness = 1
-    scriptsStroke.Transparency = 0.5
+    local saveStatus = Instance.new("TextLabel")
+    saveStatus.Name = "SaveStatus"
+    saveStatus.Size = UDim2.new(0.55, -8, 1, 0)
+    saveStatus.Position = UDim2.new(0.45, 0, 0, 0)
+    saveStatus.BackgroundTransparency = 1
+    saveStatus.Text = "separado dos remotes"
+    saveStatus.TextColor3 = Colors.TextSec
+    saveStatus.Font = Enum.Font.GothamBold
+    saveStatus.TextSize = 8
+    saveStatus.TextXAlignment = Enum.TextXAlignment.Right
+    saveStatus.TextTruncate = Enum.TextTruncate.AtEnd
+    saveStatus.Parent = codeStatus
 
-    SafeConnect(scriptsBtn.MouseEnter, function()
-        TweenService:Create(scriptsBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(55, 20, 100)
-        }):Play()
-    end)
-    SafeConnect(scriptsBtn.MouseLeave, function()
-        TweenService:Create(scriptsBtn, TweenInfo.new(0.15), {
-            BackgroundColor3 = Color3.fromRGB(30, 12, 60)
-        }):Play()
-    end)
+    local captureCodesBtn = MakeButton(codesPage, "CAPTURAR CODIGOS", Color3.fromRGB(30, 12, 60), Color3.fromRGB(200, 140, 255), UDim2.new(0, 0, 0, 42), UDim2.new(0.5, -5, 0, 34), 9)
+    local saveCodesBtn = MakeButton(codesPage, "SALVAR CODIGOS", Color3.fromRGB(10, 30, 70), Color3.fromRGB(80, 160, 255), UDim2.new(0.5, 5, 0, 42), UDim2.new(0.5, -5, 0, 34), 9)
 
-    -- -- Painel flutuante de scripts (abre ao lado) ---------------
-    local scriptPanel = Instance.new("Frame")
-    scriptPanel.Name = "ScriptPanel"
-    scriptPanel.Size = UDim2.new(0, 320, 0, 420)
-    scriptPanel.Position = UDim2.new(0, 290, 0, 0)
-    scriptPanel.BackgroundColor3 = Colors.BG
-    scriptPanel.BorderSizePixel = 0
-    scriptPanel.Visible = false
-    scriptPanel.ZIndex = 50
-    scriptPanel.Active = true
-    scriptPanel.Draggable = true
-    scriptPanel.Parent = screen
-    Instance.new("UICorner", scriptPanel).CornerRadius = UDim.new(0, 12)
+    local codeScroll = Instance.new("ScrollingFrame")
+    codeScroll.Name = "CodeList"
+    codeScroll.Size = UDim2.new(1, 0, 1, -86)
+    codeScroll.Position = UDim2.new(0, 0, 0, 86)
+    codeScroll.BackgroundTransparency = 1
+    codeScroll.BorderSizePixel = 0
+    codeScroll.ScrollBarThickness = 3
+    codeScroll.ScrollBarImageColor3 = Color3.fromRGB(180, 100, 255)
+    codeScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    codeScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    codeScroll.Parent = codesPage
 
-    local spStroke = Instance.new("UIStroke", scriptPanel)
-    spStroke.Color = Color3.fromRGB(180, 100, 255)
-    spStroke.Thickness = 1.5
-    spStroke.Transparency = 0.3
+    local codeLayout = Instance.new("UIListLayout", codeScroll)
+    codeLayout.Padding = UDim.new(0, 5)
+    codeLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    local codePadding = Instance.new("UIPadding", codeScroll)
+    codePadding.PaddingBottom = UDim.new(0, 6)
 
-    -- Cabecalho do painel
-    local spHeader = Instance.new("Frame")
-    spHeader.Size = UDim2.new(1, 0, 0, 36)
-    spHeader.BackgroundColor3 = Colors.Surface
-    spHeader.BorderSizePixel = 0
-    spHeader.ZIndex = 51
-    spHeader.Parent = scriptPanel
-    Instance.new("UICorner", spHeader).CornerRadius = UDim.new(0, 12)
-
-    local spHeaderBottom = Instance.new("Frame")
-    spHeaderBottom.Size = UDim2.new(1, 0, 0, 10)
-    spHeaderBottom.Position = UDim2.new(0, 0, 1, -10)
-    spHeaderBottom.BackgroundColor3 = Colors.Surface
-    spHeaderBottom.BorderSizePixel = 0
-    spHeaderBottom.ZIndex = 51
-    spHeaderBottom.Parent = spHeader
-
-    local spTitle = Instance.new("TextLabel")
-    spTitle.Size = UDim2.new(1, -80, 1, 0)
-    spTitle.Position = UDim2.new(0, 12, 0, 0)
-    spTitle.BackgroundTransparency = 1
-    spTitle.Text = "CODIGOS CAPTURADOS"
-    spTitle.TextColor3 = Color3.fromRGB(180, 100, 255)
-    spTitle.Font = Enum.Font.GothamBold
-    spTitle.TextSize = 11
-    spTitle.TextXAlignment = Enum.TextXAlignment.Left
-    spTitle.ZIndex = 52
-    spTitle.Parent = spHeader
-
-    local spCount = Instance.new("TextLabel")
-    spCount.Name = "ScriptCount"
-    spCount.Size = UDim2.new(0, 60, 1, 0)
-    spCount.Position = UDim2.new(1, -64, 0, 0)
-    spCount.BackgroundTransparency = 1
-    spCount.Text = "0 scripts"
-    spCount.TextColor3 = Colors.TextSec
-    spCount.Font = Enum.Font.GothamBold
-    spCount.TextSize = 9
-    spCount.TextXAlignment = Enum.TextXAlignment.Right
-    spCount.ZIndex = 52
-    spCount.Parent = spHeader
-
-    -- Botao SCAN dentro do painel
-    local spScanBtn = Instance.new("TextButton")
-    spScanBtn.Size = UDim2.new(0.5, -8, 0, 28)
-    spScanBtn.Position = UDim2.new(0, 5, 0, 38)
-    spScanBtn.BackgroundColor3 = Color3.fromRGB(30, 12, 60)
-    spScanBtn.Text = "▶ CAPTURAR CODIGOS"
-    spScanBtn.TextColor3 = Color3.fromRGB(200, 140, 255)
-    spScanBtn.Font = Enum.Font.GothamBold
-    spScanBtn.TextSize = 10
-    spScanBtn.BorderSizePixel = 0
-    spScanBtn.ZIndex = 52
-    spScanBtn.Parent = scriptPanel
-    Instance.new("UICorner", spScanBtn).CornerRadius = UDim.new(0, 6)
-    local spScanStroke = Instance.new("UIStroke", spScanBtn)
-    spScanStroke.Color = Color3.fromRGB(180, 100, 255)
-    spScanStroke.Thickness = 1
-    spScanStroke.Transparency = 0.5
-
-    -- Botao SALVAR CODIGOS dentro do painel
-    local spSaveBtn = Instance.new("TextButton")
-    spSaveBtn.Size = UDim2.new(0.5, -7, 0, 28)
-    spSaveBtn.Position = UDim2.new(0.5, 2, 0, 38)
-    spSaveBtn.BackgroundColor3 = Color3.fromRGB(10, 30, 70)
-    spSaveBtn.Text = "💾 SALVAR CODIGOS"
-    spSaveBtn.TextColor3 = Color3.fromRGB(80, 160, 255)
-    spSaveBtn.Font = Enum.Font.GothamBold
-    spSaveBtn.TextSize = 9
-    spSaveBtn.BorderSizePixel = 0
-    spSaveBtn.ZIndex = 52
-    spSaveBtn.Parent = scriptPanel
-    Instance.new("UICorner", spSaveBtn).CornerRadius = UDim.new(0, 6)
-    local spSaveStroke = Instance.new("UIStroke", spSaveBtn)
-    spSaveStroke.Color = Color3.fromRGB(80, 160, 255)
-    spSaveStroke.Thickness = 1
-    spSaveStroke.Transparency = 0.5
-
-    SafeConnect(spSaveBtn.MouseButton1Click, function()
-        if not SaveCapturedScriptsToFiles then
-            spSaveBtn.Text = "ERRO FUNCAO"
-            task.wait(1.5)
-            spSaveBtn.Text = "💾 SALVAR CODIGOS"
-            return
-        end
-
-        if #RecordingData.Interactions.CapturedScripts == 0 and ScanScripts then
-            spSaveBtn.Text = "CAPTURANDO..."
-            ScanScripts()
-            if RefreshScriptPanel then RefreshScriptPanel() end
-        end
-
-        spSaveBtn.Text = "SALVANDO..."
-        local ok, result = pcall(SaveCapturedScriptsToFiles)
-        if ok and result and result.Ok then
-            spSaveBtn.Text = "SALVO: " .. tostring(result.SavedCount)
-            Log("[SCRIPTS] Pasta salva: " .. tostring(result.Folder))
-        elseif ok and result then
-            spSaveBtn.Text = "NAO SALVOU"
-            Log("[SCRIPTS] Falha ao salvar: " .. tostring(result.Error))
-        else
-            spSaveBtn.Text = "ERRO"
-            Log("[SCRIPTS] Erro ao salvar: " .. tostring(result))
-        end
-        task.wait(1.8)
-        spSaveBtn.Text = "💾 SALVAR CODIGOS"
-    end)
-
-    SafeConnect(spScanBtn.MouseButton1Click, function()
-        spScanBtn.Text = "Varrendo..."
-        ScanScripts()
-        RefreshScriptPanel()
-        spScanBtn.Text = "▶ CAPTURAR CODIGOS"
-        scriptsBtn.Text = "CODIGOS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
-    end)
-
-    -- ScrollFrame de lista
-    local spScroll = Instance.new("ScrollingFrame")
-    spScroll.Name = "ScriptList"
-    spScroll.Size = UDim2.new(1, -10, 1, -78)
-    spScroll.Position = UDim2.new(0, 5, 0, 72)
-    spScroll.BackgroundTransparency = 1
-    spScroll.BorderSizePixel = 0
-    spScroll.ScrollBarThickness = 3
-    spScroll.ScrollBarImageColor3 = Color3.fromRGB(180, 100, 255)
-    spScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    spScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    spScroll.ZIndex = 51
-    spScroll.Parent = scriptPanel
-
-    local spListLayout = Instance.new("UIListLayout", spScroll)
-    spListLayout.Padding = UDim.new(0, 4)
-    spListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-
-    local spPad = Instance.new("UIPadding", spScroll)
-    spPad.PaddingTop = UDim.new(0, 4)
-    spPad.PaddingBottom = UDim.new(0, 6)
-
-    -- Funcao para popular o painel com os scripts capturados
     RefreshScriptPanel = function()
-        -- limpa filhos existentes (exceto o layout e o padding)
-        for _, child in ipairs(spScroll:GetChildren()) do
-            if child:IsA("Frame") then
+        for _, child in ipairs(codeScroll:GetChildren()) do
+            if not child:IsA("UIListLayout") and not child:IsA("UIPadding") then
                 child:Destroy()
             end
         end
 
-        local scripts = RecordingData.Interactions.CapturedScripts
-        spCount.Text = tostring(#scripts) .. " scripts"
-        scriptsBtn.Text = "SCRIPTS (" .. tostring(#scripts) .. ")"
+        local scripts = RecordingData.Interactions.CapturedScripts or {}
+        local readable = 0
+        local suspicious = 0
+        for _, entry in ipairs(scripts) do
+            if entry.SourceReadable then readable = readable + 1 end
+            if entry.Encrypted == true or entry.Encrypted == "partial" then suspicious = suspicious + 1 end
+        end
+        codeCount.Text = tostring(#scripts) .. " CODIGOS"
+        saveStatus.Text = tostring(readable) .. " legiveis | " .. tostring(suspicious) .. " suspeitos"
 
         if #scripts == 0 then
-            local emptyLabel = Instance.new("TextLabel")
-            emptyLabel.Size = UDim2.new(1, -10, 0, 40)
-            emptyLabel.BackgroundTransparency = 1
-            emptyLabel.Text = "Nenhum script capturado ainda.\nUse CAPTURAR CODIGOS."
-            emptyLabel.TextColor3 = Colors.TextSec
-            emptyLabel.Font = Enum.Font.Gotham
-            emptyLabel.TextSize = 10
-            emptyLabel.TextWrapped = true
-            emptyLabel.ZIndex = 52
-            emptyLabel.LayoutOrder = 1
-            emptyLabel.Parent = spScroll
+            local empty = Instance.new("TextLabel")
+            empty.Size = UDim2.new(1, -8, 0, 54)
+            empty.BackgroundColor3 = Colors.Surface
+            empty.BorderSizePixel = 0
+            empty.Text = "Nenhum codigo capturado.\nClique em CAPTURAR CODIGOS e depois SALVAR CODIGOS."
+            empty.TextColor3 = Colors.TextSec
+            empty.Font = Enum.Font.Gotham
+            empty.TextSize = 10
+            empty.TextWrapped = true
+            empty.Parent = codeScroll
+            Instance.new("UICorner", empty).CornerRadius = UDim.new(0, 6)
             return
         end
 
         for index, entry in ipairs(scripts) do
             local card = Instance.new("Frame")
-            card.Size = UDim2.new(1, -6, 0, 132)
+            card.Size = UDim2.new(1, -6, 0, 62)
             card.BackgroundColor3 = Colors.Surface
             card.BorderSizePixel = 0
-            card.ZIndex = 52
             card.LayoutOrder = index
-            card.Parent = spScroll
+            card.Parent = codeScroll
             Instance.new("UICorner", card).CornerRadius = UDim.new(0, 6)
 
-            -- Barra lateral colorida por status de cripto
-            local statusBar = Instance.new("Frame")
-            statusBar.Size = UDim2.new(0, 3, 1, -8)
-            statusBar.Position = UDim2.new(0, 4, 0, 4)
-            statusBar.BorderSizePixel = 0
-            statusBar.ZIndex = 53
-            statusBar.Parent = card
-            Instance.new("UICorner", statusBar).CornerRadius = UDim.new(0, 2)
-
-            local statusColor
+            local statusColor = Color3.fromRGB(30, 220, 120)
             if entry.Encrypted == true then
-                statusColor = Color3.fromRGB(255, 80, 80)     -- vermelho = criptografado
+                statusColor = Color3.fromRGB(255, 80, 80)
             elseif entry.Encrypted == "partial" then
-                statusColor = Color3.fromRGB(255, 160, 30)    -- laranja = suspeito
-            else
-                statusColor = Color3.fromRGB(30, 220, 120)    -- verde = legivel
+                statusColor = Color3.fromRGB(255, 160, 30)
+            elseif not entry.SourceReadable then
+                statusColor = Colors.TextMuted
             end
-            statusBar.BackgroundColor3 = statusColor
 
-            -- Nome do script
+            local bar = Instance.new("Frame")
+            bar.Size = UDim2.new(0, 3, 1, -8)
+            bar.Position = UDim2.new(0, 4, 0, 4)
+            bar.BackgroundColor3 = statusColor
+            bar.BorderSizePixel = 0
+            bar.Parent = card
+            Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 2)
+
             local nameLabel = Instance.new("TextLabel")
-            nameLabel.Size = UDim2.new(1, -70, 0, 16)
-            nameLabel.Position = UDim2.new(0, 14, 0, 6)
+            nameLabel.Size = UDim2.new(1, -82, 0, 15)
+            nameLabel.Position = UDim2.new(0, 14, 0, 5)
             nameLabel.BackgroundTransparency = 1
-            nameLabel.Text = entry.Name or "?"
+            nameLabel.Text = tostring(entry.Name or "?")
             nameLabel.TextColor3 = Colors.TextPri
             nameLabel.Font = Enum.Font.GothamBold
             nameLabel.TextSize = 10
             nameLabel.TextXAlignment = Enum.TextXAlignment.Left
             nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
-            nameLabel.ZIndex = 53
             nameLabel.Parent = card
 
-            -- Badge de classe
-            local classBadge = Instance.new("TextLabel")
-            classBadge.Size = UDim2.new(0, 54, 0, 14)
-            classBadge.Position = UDim2.new(1, -60, 0, 6)
-            classBadge.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-            classBadge.BorderSizePixel = 0
-            classBadge.Text = entry.ClassName or "Script"
-            classBadge.TextColor3 = Color3.fromRGB(180, 100, 255)
-            classBadge.Font = Enum.Font.GothamBold
-            classBadge.TextSize = 8
-            classBadge.ZIndex = 53
-            classBadge.Parent = card
-            Instance.new("UICorner", classBadge).CornerRadius = UDim.new(0, 3)
+            local badge = Instance.new("TextLabel")
+            badge.Size = UDim2.new(0, 64, 0, 14)
+            badge.Position = UDim2.new(1, -70, 0, 5)
+            badge.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+            badge.BorderSizePixel = 0
+            badge.Text = tostring(entry.ClassName or "Script")
+            badge.TextColor3 = Color3.fromRGB(180, 100, 255)
+            badge.Font = Enum.Font.GothamBold
+            badge.TextSize = 8
+            badge.Parent = card
+            Instance.new("UICorner", badge).CornerRadius = UDim.new(0, 3)
 
-            -- Path (arquivo de origem)
             local pathLabel = Instance.new("TextLabel")
-            pathLabel.Size = UDim2.new(1, -14, 0, 14)
-            pathLabel.Position = UDim2.new(0, 14, 0, 24)
+            pathLabel.Size = UDim2.new(1, -16, 0, 13)
+            pathLabel.Position = UDim2.new(0, 14, 0, 22)
             pathLabel.BackgroundTransparency = 1
-            pathLabel.Text = "📄 " .. (entry.Path or "?")
+            pathLabel.Text = tostring(entry.Path or "?")
             pathLabel.TextColor3 = Colors.TextSec
             pathLabel.Font = Enum.Font.Gotham
             pathLabel.TextSize = 8
             pathLabel.TextXAlignment = Enum.TextXAlignment.Left
             pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
-            pathLabel.ZIndex = 53
             pathLabel.Parent = card
 
-            -- Status de criptografia
-            local cryptoText = entry.Encrypted == true and "🔒 CODIFICADO"
-                or entry.Encrypted == "partial" and "⚠ SUSPEITO"
-                or "✓ NORMAL"
-            local cryptoLabel = Instance.new("TextLabel")
-            cryptoLabel.Size = UDim2.new(0, 120, 0, 13)
-            cryptoLabel.Position = UDim2.new(0, 14, 0, 40)
-            cryptoLabel.BackgroundTransparency = 1
-            cryptoLabel.Text = cryptoText
-            cryptoLabel.TextColor3 = statusColor
-            cryptoLabel.Font = Enum.Font.GothamBold
-            cryptoLabel.TextSize = 8
-            cryptoLabel.TextXAlignment = Enum.TextXAlignment.Left
-            cryptoLabel.ZIndex = 53
-            cryptoLabel.Parent = card
-
-            -- Metodo de decode (se detectado)
-            if entry.DecodeMethod and entry.DecodeMethod ~= "plain" then
-                local decodeLabel = Instance.new("TextLabel")
-                decodeLabel.Size = UDim2.new(0, 120, 0, 13)
-                decodeLabel.Position = UDim2.new(0, 14, 0, 53)
-                decodeLabel.BackgroundTransparency = 1
-                decodeLabel.Text = "decode: " .. entry.DecodeMethod
-                decodeLabel.TextColor3 = Colors.TextMuted
-                decodeLabel.Font = Enum.Font.Gotham
-                decodeLabel.TextSize = 8
-                decodeLabel.TextXAlignment = Enum.TextXAlignment.Left
-                decodeLabel.ZIndex = 53
-                decodeLabel.Parent = card
-            end
-
-            local readText = entry.SourceReadable and ((entry.CodeLength or 0) .. " chars") or "metadata apenas"
-            local readLabel = Instance.new("TextLabel")
-            readLabel.Size = UDim2.new(0, 150, 0, 13)
-            readLabel.Position = UDim2.new(0, 140, 0, 40)
-            readLabel.BackgroundTransparency = 1
-            readLabel.Text = readText
-            readLabel.TextColor3 = Colors.TextSec
-            readLabel.Font = Enum.Font.Gotham
-            readLabel.TextSize = 8
-            readLabel.TextXAlignment = Enum.TextXAlignment.Left
-            readLabel.TextTruncate = Enum.TextTruncate.AtEnd
-            readLabel.ZIndex = 53
-            readLabel.Parent = card
-
+            local preview = entry.CodePreview or entry.Note or entry.SourceReadStatus or "metadata"
             local previewLabel = Instance.new("TextLabel")
-            previewLabel.Size = UDim2.new(1, -22, 0, 48)
-            previewLabel.Position = UDim2.new(0, 14, 0, 68)
-            previewLabel.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
-            previewLabel.BackgroundTransparency = 0.1
-            previewLabel.BorderSizePixel = 0
-            previewLabel.Text = entry.CodePreview or entry.Note or "Sem codigo legivel neste ambiente."
-            previewLabel.TextColor3 = Colors.TextSec
-            previewLabel.Font = Enum.Font.Code
+            previewLabel.Size = UDim2.new(1, -16, 0, 13)
+            previewLabel.Position = UDim2.new(0, 14, 0, 38)
+            previewLabel.BackgroundTransparency = 1
+            previewLabel.Text = tostring(preview)
+            previewLabel.TextColor3 = Colors.TextMuted
+            previewLabel.Font = Enum.Font.Gotham
             previewLabel.TextSize = 8
             previewLabel.TextXAlignment = Enum.TextXAlignment.Left
-            previewLabel.TextYAlignment = Enum.TextYAlignment.Top
-            previewLabel.TextWrapped = true
             previewLabel.TextTruncate = Enum.TextTruncate.AtEnd
-            previewLabel.ZIndex = 53
             previewLabel.Parent = card
-            Instance.new("UICorner", previewLabel).CornerRadius = UDim.new(0, 4)
 
-            -- Copia individual removida: os codigos agora sao salvos em arquivos .lua pelo botao SALVAR CODIGOS.
-
-            -- Timestamp + source
-            local timeLabel = Instance.new("TextLabel")
-            timeLabel.Size = UDim2.new(1, -14, 0, 12)
-            timeLabel.Position = UDim2.new(0, 14, 1, -16)
-            timeLabel.BackgroundTransparency = 1
-            timeLabel.Text = (entry.Source or "?") .. " · " .. (entry.Time or "")
-            timeLabel.TextColor3 = Colors.TextMuted
-            timeLabel.Font = Enum.Font.Gotham
-            timeLabel.TextSize = 8
-            timeLabel.TextXAlignment = Enum.TextXAlignment.Left
-            timeLabel.TextTruncate = Enum.TextTruncate.AtEnd
-            timeLabel.ZIndex = 53
-            timeLabel.Parent = card
+            local flags = entry.Encrypted == true and "CRIPTO" or entry.Encrypted == "partial" and "SUSPEITO" or entry.SourceReadable and "LEGIVEL" or "SEM SOURCE"
+            local flagsLabel = Instance.new("TextLabel")
+            flagsLabel.Size = UDim2.new(1, -16, 0, 11)
+            flagsLabel.Position = UDim2.new(0, 14, 1, -13)
+            flagsLabel.BackgroundTransparency = 1
+            flagsLabel.Text = flags .. " | " .. tostring(entry.DecodeMethod or "plain") .. " | " .. tostring(entry.Time or "")
+            flagsLabel.TextColor3 = statusColor
+            flagsLabel.Font = Enum.Font.GothamBold
+            flagsLabel.TextSize = 8
+            flagsLabel.TextXAlignment = Enum.TextXAlignment.Left
+            flagsLabel.TextTruncate = Enum.TextTruncate.AtEnd
+            flagsLabel.Parent = card
         end
     end
 
-    -- Abre/fecha painel ao clicar no botao SCRIPTS
-    SafeConnect(scriptsBtn.MouseButton1Click, function()
-        scriptPanel.Visible = not scriptPanel.Visible
-        if scriptPanel.Visible then
-            RefreshScriptPanel()
-            scriptsBtn.Text = "CODIGOS ▲ FECHAR"
-        else
-            scriptsBtn.Text = "CODIGOS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
-        end
+    SafeConnect(captureCodesBtn.MouseButton1Click, function()
+        captureCodesBtn.Text = "CAPTURANDO..."
+        if ScanScripts then ScanScripts() end
+        if RefreshScriptPanel then RefreshScriptPanel() end
+        captureCodesBtn.Text = "CAPTURADO: " .. tostring(#(RecordingData.Interactions.CapturedScripts or {}))
+        task.wait(1.2)
+        captureCodesBtn.Text = "CAPTURAR CODIGOS"
     end)
 
-    -- -- Referencias globais -------------------------------
+    SafeConnect(saveCodesBtn.MouseButton1Click, function()
+        if #(RecordingData.Interactions.CapturedScripts or {}) == 0 and ScanScripts then
+            saveCodesBtn.Text = "CAPTURANDO..."
+            ScanScripts()
+            if RefreshScriptPanel then RefreshScriptPanel() end
+        end
+
+        saveCodesBtn.Text = "SALVANDO..."
+        if SaveCapturedScriptsToFiles then
+            local ok, result = pcall(SaveCapturedScriptsToFiles)
+            if ok and result and result.Ok then
+                saveCodesBtn.Text = "SALVO: " .. tostring(result.SavedCount)
+                saveStatus.Text = "pasta: " .. tostring(result.Folder or "")
+                Log("[CODIGOS] Salvo em: " .. tostring(result.Folder))
+            elseif ok and result then
+                saveCodesBtn.Text = "NAO SALVOU"
+                saveStatus.Text = tostring(result.Error or "erro desconhecido")
+                Log("[CODIGOS] Falha ao salvar: " .. tostring(result.Error))
+            else
+                saveCodesBtn.Text = "ERRO"
+                saveStatus.Text = tostring(result)
+                Log("[CODIGOS] Erro ao salvar: " .. tostring(result))
+            end
+        else
+            saveCodesBtn.Text = "SEM FUNCAO"
+            saveStatus.Text = "SaveCapturedScriptsToFiles nil"
+        end
+        task.wait(1.8)
+        saveCodesBtn.Text = "SALVAR CODIGOS"
+    end)
+
+    SetTab("GERAL")
+    RefreshScriptPanel()
+
     DebugUI = {
-        stateVal      = stateVal,
-        stats         = statLabels,
-        scriptsBtn    = scriptsBtn,
-        scriptPanel   = scriptPanel,
-        spCount       = spCount,
+        stateVal = stateVal,
+        stats = statLabels,
+        codeCount = codeCount,
+        saveStatus = saveStatus,
+        currentTab = function() return currentTab end,
         refreshScripts = RefreshScriptPanel,
     }
 end
@@ -2717,6 +2506,22 @@ local function BuildScriptFilePath(baseFolder, entry, usedPaths)
     return filePath
 end
 
+local function BuildFlatScriptFileName(entry, usedNames, stamp)
+    local id = tonumber(entry.ID) or 0
+    local source = SanitizeFileName(entry.Source or "Local")
+    local scriptName = SanitizeFileName(entry.Name or ("script_" .. tostring(id)))
+    local className = tostring(entry.ClassName or "Script")
+    local extension = GetScriptExtension(className)
+
+    -- Mantem o nome do script visivel e coloca ID na frente para nao sobrescrever.
+    local fileName = string.format("%03d_%s_%s%s", id, source, scriptName, extension)
+    if usedNames[fileName] then
+        fileName = string.format("%03d_%s_%s_%s%s", id, source, scriptName, stamp, extension)
+    end
+    usedNames[fileName] = true
+    return fileName
+end
+
 SaveCapturedScriptsToFiles = function()
     if not writefile then
         return { Ok = false, Error = "writefile indisponivel neste executor" }
@@ -2729,7 +2534,15 @@ SaveCapturedScriptsToFiles = function()
 
     local stamp = os.date("%Y%m%d_%H%M%S")
     local gameName = GetSafeGameName()
-    local baseFolder = tostring(Config.ScriptSaveRootFolder or "EZZ_CapturedCodes") .. "/" .. gameName .. "_" .. tostring(game.PlaceId) .. "_" .. stamp
+    local rootFolder = tostring(Config.ScriptSaveRootFolder or "EZZ_CapturedCodes")
+    local baseFolder = rootFolder .. "/" .. gameName
+
+    -- Criacao simples: raiz + pasta do jogo. Evita varias subpastas profundas, porque muitos executores falham nisso.
+    local okRoot, errRoot = EnsureFolder(rootFolder)
+    if not okRoot then
+        return { Ok = false, Error = errRoot }
+    end
+
     local okFolder, errFolder = EnsureFolder(baseFolder)
     if not okFolder then
         return { Ok = false, Error = errFolder }
@@ -2741,58 +2554,60 @@ SaveCapturedScriptsToFiles = function()
         PlayerName = LocalPlayer.Name,
         SavedAt = os.date("%Y-%m-%d %H:%M:%S"),
         Folder = baseFolder,
+        Mode = "flat_files_no_deep_subfolders",
         TotalCaptured = #scripts,
         TotalSaved = 0,
         TotalMetadataOnly = 0,
+        TotalErrors = 0,
         Files = {},
     }
 
-    local usedPaths = {}
+    local usedNames = {}
 
     for _, entry in ipairs(scripts) do
         local code = entry.Code
         local savedRawFallback = false
+
         if (type(code) ~= "string" or code == "") and type(entry.RawCode) == "string" and entry.RawCode ~= "" then
             code = entry.RawCode
             savedRawFallback = true
         end
+
         if type(code) == "string" and code ~= "" then
-            local filePath, fileErr = BuildScriptFilePath(baseFolder, entry, usedPaths)
-            if filePath then
-                local okWrite, writeErr = pcall(function()
-                    writefile(filePath, code)
-                end)
-                if okWrite then
-                    manifest.TotalSaved = manifest.TotalSaved + 1
-                    table.insert(manifest.Files, {
-                        ID = entry.ID,
-                        Name = entry.Name,
-                        ClassName = entry.ClassName,
-                        Path = entry.Path,
-                        Source = entry.Source,
-                        File = filePath,
-                        SourceReadable = entry.SourceReadable,
-                        DecodeMethod = entry.DecodeMethod,
-                        Encrypted = entry.Encrypted,
-                        CodeLength = entry.CodeLength,
-                        CodeTruncated = entry.CodeTruncated,
-                        SavedRawFallback = savedRawFallback,
-                        SuspiciousFlags = entry.SuspiciousFlags,
-                    })
-                else
-                    table.insert(manifest.Files, {
-                        ID = entry.ID,
-                        Name = entry.Name,
-                        Path = entry.Path,
-                        Error = tostring(writeErr),
-                    })
-                end
-            else
+            local fileName = BuildFlatScriptFileName(entry, usedNames, stamp)
+            local filePath = baseFolder .. "/" .. fileName
+            local okWrite, writeErr = pcall(function()
+                writefile(filePath, code)
+            end)
+
+            if okWrite then
+                manifest.TotalSaved = manifest.TotalSaved + 1
                 table.insert(manifest.Files, {
                     ID = entry.ID,
                     Name = entry.Name,
+                    ClassName = entry.ClassName,
                     Path = entry.Path,
-                    Error = tostring(fileErr),
+                    Source = entry.Source,
+                    File = filePath,
+                    FileName = fileName,
+                    SourceReadable = entry.SourceReadable,
+                    DecodeMethod = entry.DecodeMethod,
+                    Encrypted = entry.Encrypted,
+                    CodeLength = entry.CodeLength,
+                    RawCodeLength = entry.RawCodeLength,
+                    CodeTruncated = entry.CodeTruncated,
+                    SavedRawFallback = savedRawFallback,
+                    SuspiciousFlags = entry.SuspiciousFlags,
+                })
+            else
+                manifest.TotalErrors = manifest.TotalErrors + 1
+                table.insert(manifest.Files, {
+                    ID = entry.ID,
+                    Name = entry.Name,
+                    ClassName = entry.ClassName,
+                    Path = entry.Path,
+                    Source = entry.Source,
+                    Error = tostring(writeErr),
                 })
             end
         else
@@ -2811,30 +2626,42 @@ SaveCapturedScriptsToFiles = function()
         end
     end
 
-    local manifestPath = baseFolder .. "/manifest.json"
-    pcall(function()
+    local manifestPath = baseFolder .. "/manifest_" .. stamp .. ".json"
+    local fullJsonPath = baseFolder .. "/captured_codes_full_" .. stamp .. ".json"
+
+    local okManifest, errManifest = pcall(function()
         writefile(manifestPath, HttpService:JSONEncode(manifest))
     end)
 
-    local capturedJsonPath = baseFolder .. "/captured_codes_full.json"
-    pcall(function()
-        writefile(capturedJsonPath, HttpService:JSONEncode(scripts))
+    local okFull, errFull = pcall(function()
+        writefile(fullJsonPath, HttpService:JSONEncode(scripts))
     end)
 
-    AddToTimeline("SCRIPT_SAVE_FILES", {
+    if not okManifest then
+        manifest.TotalErrors = manifest.TotalErrors + 1
+        Log("[CODIGOS] Falha ao salvar manifest: " .. tostring(errManifest))
+    end
+    if not okFull then
+        manifest.TotalErrors = manifest.TotalErrors + 1
+        Log("[CODIGOS] Falha ao salvar JSON completo: " .. tostring(errFull))
+    end
+
+    AddToTimeline("CODE_SAVE_FILES", {
         Folder = baseFolder,
         Saved = manifest.TotalSaved,
         MetadataOnly = manifest.TotalMetadataOnly,
+        Errors = manifest.TotalErrors,
     })
 
     return {
         Ok = manifest.TotalSaved > 0,
         Folder = baseFolder,
-        Manifest = manifestPath,
-        FullJson = capturedJsonPath,
+        Manifest = okManifest and manifestPath or nil,
+        FullJson = okFull and fullJsonPath or nil,
         SavedCount = manifest.TotalSaved,
         MetadataOnly = manifest.TotalMetadataOnly,
-        Error = manifest.TotalSaved > 0 and nil or "nenhum codigo com Source legivel para salvar",
+        ErrorCount = manifest.TotalErrors,
+        Error = manifest.TotalSaved > 0 and nil or "nenhum codigo com Source/RawCode legivel foi salvo; manifest/json ainda podem ter sido criados",
     }
 end
 
@@ -3067,20 +2894,16 @@ local function UpdateUI()
     DebugUI.stats.remotes.Text = tostring(RemoteCount)
     DebugUI.stats.time.Text    = string.format("%d:%02d", mins, secs)
 
-    -- Sincroniza label do botao de scripts
-    if DebugUI.scriptsBtn and not DebugUI.scriptPanel.Visible then
-        local scriptCount = #RecordingData.Interactions.CapturedScripts
-        DebugUI.scriptsBtn.Text = "CODIGOS (" .. tostring(scriptCount) .. ")"
-    end
-    if DebugUI.spCount then
-        DebugUI.spCount.Text = tostring(#RecordingData.Interactions.CapturedScripts) .. " scripts"
+    -- Sincroniza resumo da aba CODIGOS sem abrir janela extra.
+    if DebugUI.codeCount then
+        DebugUI.codeCount.Text = tostring(#(RecordingData.Interactions.CapturedScripts or {})) .. " CODIGOS"
     end
 end
 
 -- -----------------------------------------------------------
 -- INICIALIZACAO
 -- -----------------------------------------------------------
-Log("EZZ v3.1 - Iniciando...")
+Log("EZZ v3.3 - Iniciando...")
 
 CreateUI()
 task.wait(1)
@@ -3110,7 +2933,7 @@ Log("[OK] Ativo! Use os botoes para capturar e copiar.")
 
 pcall(function()
     StarterGui:SetCore("SendNotification", {
-        Title = "EZZ HUB v3.1",
+        Title = "EZZ HUB v3.3",
         Text = "Interface atualizada - pronto!",
         Duration = 4
     })
