@@ -1,0 +1,2875 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CollectionService = game:GetService("CollectionService")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+-- -----------------------------------------------------------
+-- CONFIGURACAO
+-- -----------------------------------------------------------
+local Config = {
+    MaxUIElementsPerScreen = 20,
+    CaptureOnlyVisibleUI = true,
+    IgnoreRobloxUI = true,
+    CompactMode = true,
+    MaxClicks = 50,
+    MaxRemoteCalls = 80,
+    MaxRemoteArgs = 12,
+    MaxCapturedScripts = 200,
+    MaxCapturedCodeChars = 120000,
+    MaxScriptPreviewChars = 900,
+    EnableScriptSourceRead = true,
+    MaxRemoteArgDepth = 5,
+    MaxRemoteTreeItems = 20,
+    MaxRemoteContextValues = 30,
+    MaxRemoteContextScripts = 20,
+    MaxRemoteAncestorDepth = 6,
+    MaxObservableChanges = 80,
+    MaxHttpCalls = 40,
+    MaxHttpBodyChars = 6000,
+    MaxWorldInteractions = 80,
+    MaxChatCommands = 40,
+    MaxPeriodicScanResults = 80,
+    MaxObservedAttributeWatches = 220,
+    MaxObservedValueWatches = 220,
+    EnableHttpHooks = true,
+    EnableRemoteReturnCapture = true,
+    EnableClickDetectorMonitor = true,
+    EnableTouchInterestMonitor = true,
+    EnablePeriodicValueScan = true,
+    EnableChatCommandCapture = true,
+    EnableUiToggleHotkey = true,
+    EnablePatternStateDetection = true,
+    UiToggleKey = Enum.KeyCode.F9,
+    DebounceCooldown = 2,
+    PeriodicValueScanInterval = 30,
+    DirectInteractionOnly = true,
+    RemoteInteractionWindow = 1.5,
+    ObservableInteractionWindow = 4,
+    PlayerContainerInteractionWindow = 12,
+    StateDetectThrottle = 0.5,
+    IncludeObjectCoordinates = false,
+    StatePatterns = {
+        MAIN_MENU = { UI = {"PLAY", "START", "JOGAR"}, Workspace = {} },
+        LOBBY = { UI = {"READY", "PRONTO", "TEAM"}, Workspace = {"Lobby", "Map"} },
+        IN_GAME = { UI = {"RESPAWN", "SHOP"}, Workspace = {"Ghost", "Round", "Match"} },
+    }
+}
+
+-- -----------------------------------------------------------
+-- BANCO DE DADOS
+-- -----------------------------------------------------------
+local RecordingData = {
+    SessionInfo = {
+        StartTime = os.time(),
+        PlaceId = game.PlaceId,
+        PlayerName = LocalPlayer.Name,
+        Version = "3.1-CODE-CAPTURE-DIRECT-SOURCE"
+    },
+    GameStates = {
+        MainMenu = { Captured = false, ImportantButtons = {}, KeyElements = {} },
+        Lobby = { Captured = false, Players = {}, MapButtons = {}, DifficultyButtons = {} },
+        InGame = { Captured = false, Ghost = {}, ImportantItems = {} }
+    },
+    Interactions = {
+        Clicks = {},
+        RemoteCalls = {},
+        HttpRequests = {},
+        WorldInteractions = {},
+        ChatCommands = {},
+        ObservableChanges = {},
+        CapturedScripts = {},
+        Summary = {
+            TotalClicks = 0,
+            TotalRemotes = 0,
+            TotalHttpRequests = 0,
+            TotalWorldInteractions = 0,
+            TotalObservableChanges = 0,
+            TotalScripts = 0,
+            UniqueTargets = {}
+        }
+    },
+    Timeline = {}
+}
+
+local CurrentState = "DETECTANDO"
+local DebugUI = nil
+local ClickCount = 0
+local RemoteCount = 0
+local ObservableChangeCount = 0
+local HttpRequestCount = 0
+local WorldInteractionCount = 0
+local LastDirectInteractionAt = 0
+local LastStateDetectAt = 0
+local LastDetectedState = "UNKNOWN"
+
+-- -----------------------------------------------------------
+-- FUNCOES AUXILIARES
+-- -----------------------------------------------------------
+local function Log(msg)
+    print("[EZZ] " .. tostring(msg))
+end
+
+local function AddToTimeline(eventType, data)
+    if #RecordingData.Timeline > 100 then
+        table.remove(RecordingData.Timeline, 1)
+    end
+    table.insert(RecordingData.Timeline, {
+        Time = os.time() - RecordingData.SessionInfo.StartTime,
+        Type = eventType,
+        Data = data
+    })
+end
+
+local DebounceTable = {}
+
+local function BuildDebounceKey(eventType, parts)
+    local buffer = { tostring(eventType) }
+    if type(parts) == "table" then
+        for _, value in ipairs(parts) do
+            table.insert(buffer, tostring(value))
+        end
+    end
+    return table.concat(buffer, "|")
+end
+
+local function ShouldDebounce(key, cooldown)
+    cooldown = cooldown or Config.DebounceCooldown
+    local now = os.clock()
+    if DebounceTable[key] and now - DebounceTable[key] < cooldown then
+        return true
+    end
+    DebounceTable[key] = now
+    return false
+end
+
+local function AddToTimelineDebounced(eventType, data, keyParts, cooldown)
+    local key = BuildDebounceKey(eventType, keyParts)
+    if ShouldDebounce(key, cooldown) then return end
+    AddToTimeline(eventType, data)
+end
+
+local function SafeDefer(callback, ...)
+    local args = {...}
+    args.n = select("#", ...)
+    task.defer(function()
+        local ok, err = pcall(callback, table.unpack(args, 1, args.n))
+        if not ok then
+            Log("[ERROR] " .. tostring(err))
+        end
+    end)
+end
+
+local function SafeConnect(signal, callback)
+    local ok, connection = pcall(function()
+        return signal:Connect(function(...)
+            local success, err = pcall(callback, ...)
+            if not success then
+                Log("[ERROR] " .. tostring(err))
+            end
+        end)
+    end)
+    if ok then return connection end
+    Log("[ERROR] Falha ao conectar evento: " .. tostring(connection))
+    return nil
+end
+
+-- -----------------------------------------------------------
+-- DESCRIPTOGRAFIA / DECODIFICACAO DE TEXTOS CAPTURADOS
+-- -----------------------------------------------------------
+local Base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function PadBase64(data)
+    local remainder = #data % 4
+    if remainder == 1 then return nil end
+    if remainder == 2 then return data .. "==" end
+    if remainder == 3 then return data .. "=" end
+    return data
+end
+
+local function DecodeBase64(data)
+    if type(data) ~= "string" or data == "" or data:find("[^A-Za-z0-9+/=]") then return nil end
+    local padded = PadBase64(data)
+    if not padded then return nil end
+    local clean = padded:gsub("=", "")
+    local bits = clean:gsub(".", function(char)
+        local index = Base64Chars:find(char, 1, true)
+        if not index then return "" end
+        index = index - 1
+        local chunk = ""
+        for bit = 6, 1, -1 do
+            chunk = chunk .. (index % 2 ^ bit - index % 2 ^ (bit - 1) > 0 and "1" or "0")
+        end
+        return chunk
+    end)
+
+    return bits:gsub("%d%d%d?%d?%d?%d?%d?%d?", function(byte)
+        if #byte ~= 8 then return "" end
+        local value = 0
+        for i = 1, 8 do
+            value = value + (byte:sub(i, i) == "1" and 2 ^ (8 - i) or 0)
+        end
+        return string.char(value)
+    end)
+end
+
+local function DecodeBase64Url(data)
+    if type(data) ~= "string" or data == "" or data:find("[^A-Za-z0-9_%-=]") then return nil end
+    local normalized = data:gsub("-", "+"):gsub("_", "/")
+    return DecodeBase64(normalized)
+end
+
+local function DecodeHex(data)
+    if type(data) ~= "string" then return nil end
+    local clean = data:gsub("\\x", ""):gsub("^0x", ""):gsub("[%s%-_:]", "")
+    if #clean < 2 or #clean % 2 ~= 0 or clean:find("[^%x]") then return nil end
+    return clean:gsub("%x%x", function(pair)
+        return string.char(tonumber(pair, 16))
+    end)
+end
+
+local function DecodeUrl(data)
+    if type(data) ~= "string" or not data:find("%%") then return nil end
+    return data:gsub("+", " "):gsub("%%u(%x%x%x%x)", function(hex)
+        local codepoint = tonumber(hex, 16)
+        if codepoint and codepoint <= 255 then
+            return string.char(codepoint)
+        end
+        return ""
+    end):gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16))
+    end)
+end
+
+local function DecodeDecimalBytes(data)
+    if type(data) ~= "string" then return nil end
+    if not data:find("%d+[%s,;|]+%d+") then return nil end
+
+    local bytes = {}
+    for token in data:gmatch("%d+") do
+        local value = tonumber(token)
+        if not value or value < 0 or value > 255 then return nil end
+        table.insert(bytes, string.char(value))
+    end
+
+    if #bytes < 2 then return nil end
+    return table.concat(bytes)
+end
+
+local function DecodeRot13(data)
+    if type(data) ~= "string" then return nil end
+    local payload = data:match("^rot13:(.+)$") or data:match("^ROT13:(.+)$")
+    if not payload or #payload < 4 or payload:find("[^%a%s_%-%.]") then return nil end
+    return payload:gsub("%a", function(char)
+        local base = char:lower() == char and string.byte("a") or string.byte("A")
+        return string.char(((string.byte(char) - base + 13) % 26) + base)
+    end)
+end
+
+local function LooksReadable(text)
+    if type(text) ~= "string" or #text == 0 then return false end
+    local printable = 0
+    for i = 1, #text do
+        local byte = text:byte(i)
+        if byte == 9 or byte == 10 or byte == 13 or (byte >= 32 and byte <= 126) then
+            printable = printable + 1
+        end
+    end
+    return printable / #text >= 0.85
+end
+
+local function IsRobloxAssetID(value)
+    local text = tostring(value)
+    if not text:match("^%d+$") then return false end
+    local number = tonumber(text)
+    return number and number >= 10000000 and number <= 9999999999
+end
+
+local function TryDecryptText(value)
+    if type(value) ~= "string" or value == "" then
+        return value, "plain"
+    end
+
+    local methods = {
+        { Name = "url", Decode = DecodeUrl },
+        { Name = "hex", Decode = DecodeHex },
+        { Name = "decimal_bytes", Decode = DecodeDecimalBytes },
+        { Name = "base64", Decode = DecodeBase64 },
+        { Name = "base64url", Decode = DecodeBase64Url },
+        { Name = "rot13", Decode = DecodeRot13 },
+    }
+
+    for _, method in ipairs(methods) do
+        local ok, decoded = pcall(method.Decode, value)
+        if ok and decoded and decoded ~= value and LooksReadable(decoded) then
+            return decoded, method.Name
+        end
+    end
+
+    return value, "plain"
+end
+
+-- -----------------------------------------------------------
+-- PALETA DE CORES
+-- -----------------------------------------------------------
+local Colors = {
+    BG         = Color3.fromRGB(10, 10, 14),        -- fundo quase preto
+    Surface    = Color3.fromRGB(18, 18, 24),        -- paineis internos
+    Border     = Color3.fromRGB(255, 30, 60),       -- vermelho neon
+    Accent     = Color3.fromRGB(255, 50, 80),       -- vermelho vivo
+    AccentDim  = Color3.fromRGB(120, 15, 30),       -- vermelho escuro
+    TextPri    = Color3.fromRGB(240, 240, 245),     -- branco frio
+    TextSec    = Color3.fromRGB(130, 130, 145),     -- cinza medio
+    TextMuted  = Color3.fromRGB(60, 60, 72),        -- cinza escuro
+    Green      = Color3.fromRGB(30, 220, 120),      -- confirmacao
+    GreenDim   = Color3.fromRGB(10, 60, 35),
+    Orange     = Color3.fromRGB(255, 160, 30),      -- capturar
+    OrangeDim  = Color3.fromRGB(70, 40, 5),
+    StatBG     = Color3.fromRGB(22, 22, 30),        -- fundo dos stats
+}
+
+-- Declaracoes antecipadas usadas pela UI
+local ScanScripts
+local RefreshScriptPanel
+
+-- -----------------------------------------------------------
+-- INTERFACE REDESENHADA
+-- -----------------------------------------------------------
+local function CreateUI()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not gui then return end
+
+    if gui:FindFirstChild("EZZ_Compact") then
+        gui.EZZ_Compact:Destroy()
+    end
+
+    -- Screen
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "EZZ_Compact"
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = 999999
+    screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screen.Parent = gui
+
+    -- -- Painel principal ----------------------------------
+    local frame = Instance.new("Frame")
+    frame.Name = "MainFrame"
+    frame.Size = UDim2.new(0, 270, 0, 350)
+    frame.Position = UDim2.new(0, 14, 0, 14)
+    frame.BackgroundColor3 = Colors.BG
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Draggable = true
+    frame.Parent = screen
+
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+
+    -- Borda neon
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = Colors.Border
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.3
+
+    -- Sombra (simulada com frame menor por baixo)
+    local shadow = Instance.new("Frame")
+    shadow.Size = UDim2.new(1, 8, 1, 8)
+    shadow.Position = UDim2.new(0, -4, 0, 4)
+    shadow.BackgroundColor3 = Colors.Border
+    shadow.BackgroundTransparency = 0.88
+    shadow.BorderSizePixel = 0
+    shadow.ZIndex = frame.ZIndex - 1
+    shadow.Parent = frame
+    Instance.new("UICorner", shadow).CornerRadius = UDim.new(0, 14)
+
+    -- -- Header --------------------------------------------
+    local header = Instance.new("Frame")
+    header.Size = UDim2.new(1, 0, 0, 40)
+    header.BackgroundColor3 = Colors.Surface
+    header.BorderSizePixel = 0
+    header.Parent = frame
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
+
+    -- Arredonda so o topo
+    local headerBottom = Instance.new("Frame")
+    headerBottom.Size = UDim2.new(1, 0, 0, 12)
+    headerBottom.Position = UDim2.new(0, 0, 1, -12)
+    headerBottom.BackgroundColor3 = Colors.Surface
+    headerBottom.BorderSizePixel = 0
+    headerBottom.Parent = header
+
+    -- Ponto vermelho pulsante
+    local dot = Instance.new("Frame")
+    dot.Size = UDim2.new(0, 8, 0, 8)
+    dot.Position = UDim2.new(0, 14, 0.5, -4)
+    dot.BackgroundColor3 = Colors.Accent
+    dot.BorderSizePixel = 0
+    dot.Parent = header
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+    -- Animacao de pulso no dot
+    task.spawn(function()
+        while dot and dot.Parent do
+            TweenService:Create(dot, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
+                BackgroundTransparency = 0.7
+            }):Play()
+            task.wait(0.7)
+            TweenService:Create(dot, TweenInfo.new(0.7, Enum.EasingStyle.Sine), {
+                BackgroundTransparency = 0
+            }):Play()
+            task.wait(0.7)
+        end
+    end)
+
+    -- Titulo
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -30, 1, 0)
+    title.Position = UDim2.new(0, 28, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "EZZ HUB"
+    title.TextColor3 = Colors.TextPri
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 13
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = header
+
+    -- Versao (badge)
+    local verBadge = Instance.new("Frame")
+    verBadge.Size = UDim2.new(0, 52, 0, 18)
+    verBadge.Position = UDim2.new(1, -62, 0.5, -9)
+    verBadge.BackgroundColor3 = Colors.AccentDim
+    verBadge.BorderSizePixel = 0
+    verBadge.Parent = header
+    Instance.new("UICorner", verBadge).CornerRadius = UDim.new(0, 4)
+
+    local verLabel = Instance.new("TextLabel")
+    verLabel.Size = UDim2.new(1, 0, 1, 0)
+    verLabel.BackgroundTransparency = 1
+    verLabel.Text = "v3.1"
+    verLabel.TextColor3 = Colors.Accent
+    verLabel.Font = Enum.Font.GothamBold
+    verLabel.TextSize = 10
+    verLabel.Parent = verBadge
+
+    -- -- Estado atual --------------------------------------
+    local stateBar = Instance.new("Frame")
+    stateBar.Size = UDim2.new(1, -20, 0, 26)
+    stateBar.Position = UDim2.new(0, 10, 0, 48)
+    stateBar.BackgroundColor3 = Colors.StatBG
+    stateBar.BorderSizePixel = 0
+    stateBar.Parent = frame
+    Instance.new("UICorner", stateBar).CornerRadius = UDim.new(0, 6)
+
+    local statePrefix = Instance.new("TextLabel")
+    statePrefix.Size = UDim2.new(0, 60, 1, 0)
+    statePrefix.BackgroundTransparency = 1
+    statePrefix.Text = "ESTADO"
+    statePrefix.TextColor3 = Colors.TextMuted
+    statePrefix.Font = Enum.Font.GothamBold
+    statePrefix.TextSize = 9
+    statePrefix.TextXAlignment = Enum.TextXAlignment.Left
+    statePrefix.Visible = true
+    -- padding
+    local sp = Instance.new("UIPadding", statePrefix)
+    sp.PaddingLeft = UDim.new(0, 8)
+    statePrefix.Parent = stateBar
+
+    local stateVal = Instance.new("TextLabel")
+    stateVal.Name = "StateVal"
+    stateVal.Size = UDim2.new(1, -68, 1, 0)
+    stateVal.Position = UDim2.new(0, 60, 0, 0)
+    stateVal.BackgroundTransparency = 1
+    stateVal.Text = "DETECTANDO"
+    stateVal.TextColor3 = Colors.Accent
+    stateVal.Font = Enum.Font.GothamBold
+    stateVal.TextSize = 10
+    stateVal.TextXAlignment = Enum.TextXAlignment.Left
+    stateVal.Parent = stateBar
+
+    -- -- Stats (grid 2x2) ----------------------------------
+    local statsGrid = Instance.new("Frame")
+    statsGrid.Size = UDim2.new(1, -20, 0, 60)
+    statsGrid.Position = UDim2.new(0, 10, 0, 86)
+    statsGrid.BackgroundTransparency = 1
+    statsGrid.Parent = frame
+
+    local statsLayout = Instance.new("UIGridLayout", statsGrid)
+    statsLayout.CellSize = UDim2.new(0.5, -4, 1, -4)
+    statsLayout.CellPadding = UDim2.new(0, 8, 0, 8)
+
+    local statDefs = {
+        { icon = "#", label = "CLIQUES", key = "clicks" },
+        { icon = "@", label = "ALVOS",   key = "targets" },
+        { icon = "~", label = "REMOTES", key = "remotes" },
+        { icon = ">", label = "TEMPO",   key = "time"    },
+    }
+
+    local statLabels = {}
+    for _, def in ipairs(statDefs) do
+        local cell = Instance.new("Frame")
+        cell.BackgroundColor3 = Colors.StatBG
+        cell.BorderSizePixel = 0
+        cell.Parent = statsGrid
+        Instance.new("UICorner", cell).CornerRadius = UDim.new(0, 6)
+
+        local cellLabel = Instance.new("TextLabel")
+        cellLabel.Size = UDim2.new(1, 0, 0.45, 0)
+        cellLabel.Position = UDim2.new(0, 0, 0.05, 0)
+        cellLabel.BackgroundTransparency = 1
+        cellLabel.Text = def.icon .. " " .. def.label
+        cellLabel.TextColor3 = Colors.TextMuted
+        cellLabel.Font = Enum.Font.GothamBold
+        cellLabel.TextSize = 8
+        cellLabel.Parent = cell
+
+        local cellValue = Instance.new("TextLabel")
+        cellValue.Name = def.key
+        cellValue.Size = UDim2.new(1, -8, 0.5, 0)
+        cellValue.Position = UDim2.new(0, 4, 0.45, 0)
+        cellValue.BackgroundTransparency = 1
+        cellValue.Text = "0"
+        cellValue.TextColor3 = Colors.TextPri
+        cellValue.Font = Enum.Font.GothamBold
+        cellValue.TextSize = 14
+        cellValue.TextXAlignment = Enum.TextXAlignment.Left
+        cellValue.Parent = cell
+
+        statLabels[def.key] = cellValue
+    end
+
+    -- -- Divisor -------------------------------------------
+    local divider = Instance.new("Frame")
+    divider.Size = UDim2.new(1, -20, 0, 1)
+    divider.Position = UDim2.new(0, 10, 0, 156)
+    divider.BackgroundColor3 = Colors.TextMuted
+    divider.BackgroundTransparency = 0.6
+    divider.BorderSizePixel = 0
+    divider.Parent = frame
+
+    -- -- Botoes --------------------------------------------
+    local btnContainer = Instance.new("Frame")
+    btnContainer.Size = UDim2.new(1, -20, 0, 46)
+    btnContainer.Position = UDim2.new(0, 10, 0, 166)
+    btnContainer.BackgroundTransparency = 1
+    btnContainer.Parent = frame
+
+    local btnLayout = Instance.new("UIListLayout", btnContainer)
+    btnLayout.FillDirection = Enum.FillDirection.Horizontal
+    btnLayout.Padding = UDim.new(0, 8)
+
+    -- Botao CAPTURAR
+    local captureBtn = Instance.new("TextButton")
+    captureBtn.Size = UDim2.new(0.48, 0, 0, 34)
+    captureBtn.BackgroundColor3 = Colors.OrangeDim
+    captureBtn.Text = "CAPTURAR"
+    captureBtn.TextColor3 = Colors.Orange
+    captureBtn.Font = Enum.Font.GothamBold
+    captureBtn.TextSize = 11
+    captureBtn.BorderSizePixel = 0
+    captureBtn.Parent = btnContainer
+    Instance.new("UICorner", captureBtn).CornerRadius = UDim.new(0, 8)
+
+    local capStroke = Instance.new("UIStroke", captureBtn)
+    capStroke.Color = Colors.Orange
+    capStroke.Thickness = 1
+    capStroke.Transparency = 0.5
+
+    -- Botao COPIAR
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Size = UDim2.new(0.48, 0, 0, 34)
+    copyBtn.BackgroundColor3 = Colors.GreenDim
+    copyBtn.Text = "COPIAR"
+    copyBtn.TextColor3 = Colors.Green
+    copyBtn.Font = Enum.Font.GothamBold
+    copyBtn.TextSize = 11
+    copyBtn.BorderSizePixel = 0
+    copyBtn.Parent = btnContainer
+    Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 8)
+
+    local copyStroke = Instance.new("UIStroke", copyBtn)
+    copyStroke.Color = Colors.Green
+    copyStroke.Thickness = 1
+    copyStroke.Transparency = 0.5
+
+    -- -- Hover nos botoes ----------------------------------
+    SafeConnect(captureBtn.MouseEnter, function()
+        TweenService:Create(captureBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(90, 50, 5)
+        }):Play()
+    end)
+    SafeConnect(captureBtn.MouseLeave, function()
+        TweenService:Create(captureBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Colors.OrangeDim
+        }):Play()
+    end)
+
+    SafeConnect(copyBtn.MouseEnter, function()
+        TweenService:Create(copyBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(10, 80, 45)
+        }):Play()
+    end)
+    SafeConnect(copyBtn.MouseLeave, function()
+        TweenService:Create(copyBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Colors.GreenDim
+        }):Play()
+    end)
+
+    -- -- Acoes dos botoes ----------------------------------
+    SafeConnect(captureBtn.MouseButton1Click, function()
+        CaptureCurrentState()
+        captureBtn.Text = "FEITO!"
+        TweenService:Create(captureBtn, TweenInfo.new(0.1), {
+            BackgroundColor3 = Color3.fromRGB(40, 80, 20)
+        }):Play()
+        task.wait(1.2)
+        captureBtn.Text = "CAPTURAR"
+        TweenService:Create(captureBtn, TweenInfo.new(0.2), {
+            BackgroundColor3 = Colors.OrangeDim
+        }):Play()
+    end)
+
+    SafeConnect(copyBtn.MouseButton1Click, function()
+        local json = ExportJSON()
+        if setclipboard then
+            setclipboard(json)
+            copyBtn.Text = "COPIADO!"
+            task.wait(2)
+            copyBtn.Text = "COPIAR"
+        else
+            copyBtn.Text = "Console"
+            task.wait(2)
+            copyBtn.Text = "COPIAR"
+        end
+    end)
+
+    -- -- Segunda linha de botoes ----------------------------
+    local btnContainer2 = Instance.new("Frame")
+    btnContainer2.Size = UDim2.new(1, -20, 0, 34)
+    btnContainer2.Position = UDim2.new(0, 10, 0, 220)
+    btnContainer2.BackgroundTransparency = 1
+    btnContainer2.Parent = frame
+
+    -- Botao SALVAR
+    local saveBtn = Instance.new("TextButton")
+    saveBtn.Size = UDim2.new(1, 0, 1, 0)
+    saveBtn.BackgroundColor3 = Color3.fromRGB(10, 30, 70)
+    saveBtn.Text = "SALVAR"
+    saveBtn.TextColor3 = Color3.fromRGB(80, 160, 255)
+    saveBtn.Font = Enum.Font.GothamBold
+    saveBtn.TextSize = 11
+    saveBtn.BorderSizePixel = 0
+    saveBtn.Parent = btnContainer2
+    Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 8)
+
+    local saveStroke = Instance.new("UIStroke", saveBtn)
+    saveStroke.Color = Color3.fromRGB(80, 160, 255)
+    saveStroke.Thickness = 1
+    saveStroke.Transparency = 0.5
+
+    SafeConnect(saveBtn.MouseEnter, function()
+        TweenService:Create(saveBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(15, 50, 110)
+        }):Play()
+    end)
+    SafeConnect(saveBtn.MouseLeave, function()
+        TweenService:Create(saveBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(10, 30, 70)
+        }):Play()
+    end)
+
+    SafeConnect(saveBtn.MouseButton1Click, function()
+        local json = ExportJSON()
+        local fileName = "ezz_" .. tostring(game.PlaceId) .. "_" .. os.date("%Y%m%d_%H%M%S") .. ".json"
+        local saved = false
+
+        if writefile then
+            local ok, err = pcall(function()
+                writefile(fileName, json)
+            end)
+            if ok then
+                saved = true
+                saveBtn.Text = "SALVO!"
+                Log("[OK] Arquivo salvo: " .. fileName)
+            else
+                Log("[ERRO] Falha ao salvar: " .. tostring(err))
+                saveBtn.Text = "ERRO!"
+            end
+        else
+            saveBtn.Text = "SEM SUPORTE"
+            Log("[WARN] writefile nao disponivel neste executor")
+        end
+
+        task.wait(2)
+        saveBtn.Text = "SALVAR"
+    end)
+
+    -- -- Terceira linha de botoes: SCRIPTS ------------------------
+    local btnContainer3 = Instance.new("Frame")
+    btnContainer3.Size = UDim2.new(1, -20, 0, 34)
+    btnContainer3.Position = UDim2.new(0, 10, 0, 262)
+    btnContainer3.BackgroundTransparency = 1
+    btnContainer3.Parent = frame
+
+    local scriptsBtn = Instance.new("TextButton")
+    scriptsBtn.Size = UDim2.new(1, 0, 1, 0)
+    scriptsBtn.BackgroundColor3 = Color3.fromRGB(30, 12, 60)
+    scriptsBtn.Text = "SCRIPTS (0)"
+    scriptsBtn.TextColor3 = Color3.fromRGB(180, 100, 255)
+    scriptsBtn.Font = Enum.Font.GothamBold
+    scriptsBtn.TextSize = 11
+    scriptsBtn.BorderSizePixel = 0
+    scriptsBtn.Parent = btnContainer3
+    Instance.new("UICorner", scriptsBtn).CornerRadius = UDim.new(0, 8)
+
+    local scriptsStroke = Instance.new("UIStroke", scriptsBtn)
+    scriptsStroke.Color = Color3.fromRGB(180, 100, 255)
+    scriptsStroke.Thickness = 1
+    scriptsStroke.Transparency = 0.5
+
+    SafeConnect(scriptsBtn.MouseEnter, function()
+        TweenService:Create(scriptsBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(55, 20, 100)
+        }):Play()
+    end)
+    SafeConnect(scriptsBtn.MouseLeave, function()
+        TweenService:Create(scriptsBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(30, 12, 60)
+        }):Play()
+    end)
+
+    -- -- Painel flutuante de scripts (abre ao lado) ---------------
+    local scriptPanel = Instance.new("Frame")
+    scriptPanel.Name = "ScriptPanel"
+    scriptPanel.Size = UDim2.new(0, 320, 0, 420)
+    scriptPanel.Position = UDim2.new(0, 290, 0, 0)
+    scriptPanel.BackgroundColor3 = Colors.BG
+    scriptPanel.BorderSizePixel = 0
+    scriptPanel.Visible = false
+    scriptPanel.ZIndex = 50
+    scriptPanel.Active = true
+    scriptPanel.Draggable = true
+    scriptPanel.Parent = screen
+    Instance.new("UICorner", scriptPanel).CornerRadius = UDim.new(0, 12)
+
+    local spStroke = Instance.new("UIStroke", scriptPanel)
+    spStroke.Color = Color3.fromRGB(180, 100, 255)
+    spStroke.Thickness = 1.5
+    spStroke.Transparency = 0.3
+
+    -- Cabecalho do painel
+    local spHeader = Instance.new("Frame")
+    spHeader.Size = UDim2.new(1, 0, 0, 36)
+    spHeader.BackgroundColor3 = Colors.Surface
+    spHeader.BorderSizePixel = 0
+    spHeader.ZIndex = 51
+    spHeader.Parent = scriptPanel
+    Instance.new("UICorner", spHeader).CornerRadius = UDim.new(0, 12)
+
+    local spHeaderBottom = Instance.new("Frame")
+    spHeaderBottom.Size = UDim2.new(1, 0, 0, 10)
+    spHeaderBottom.Position = UDim2.new(0, 0, 1, -10)
+    spHeaderBottom.BackgroundColor3 = Colors.Surface
+    spHeaderBottom.BorderSizePixel = 0
+    spHeaderBottom.ZIndex = 51
+    spHeaderBottom.Parent = spHeader
+
+    local spTitle = Instance.new("TextLabel")
+    spTitle.Size = UDim2.new(1, -80, 1, 0)
+    spTitle.Position = UDim2.new(0, 12, 0, 0)
+    spTitle.BackgroundTransparency = 1
+    spTitle.Text = "SCRIPTS CAPTURADOS"
+    spTitle.TextColor3 = Color3.fromRGB(180, 100, 255)
+    spTitle.Font = Enum.Font.GothamBold
+    spTitle.TextSize = 11
+    spTitle.TextXAlignment = Enum.TextXAlignment.Left
+    spTitle.ZIndex = 52
+    spTitle.Parent = spHeader
+
+    local spCount = Instance.new("TextLabel")
+    spCount.Name = "ScriptCount"
+    spCount.Size = UDim2.new(0, 60, 1, 0)
+    spCount.Position = UDim2.new(1, -64, 0, 0)
+    spCount.BackgroundTransparency = 1
+    spCount.Text = "0 scripts"
+    spCount.TextColor3 = Colors.TextSec
+    spCount.Font = Enum.Font.GothamBold
+    spCount.TextSize = 9
+    spCount.TextXAlignment = Enum.TextXAlignment.Right
+    spCount.ZIndex = 52
+    spCount.Parent = spHeader
+
+    -- Botao SCAN dentro do painel
+    local spScanBtn = Instance.new("TextButton")
+    spScanBtn.Size = UDim2.new(1, -10, 0, 28)
+    spScanBtn.Position = UDim2.new(0, 5, 0, 38)
+    spScanBtn.BackgroundColor3 = Color3.fromRGB(30, 12, 60)
+    spScanBtn.Text = "▶ SCAN SCRIPTS"
+    spScanBtn.TextColor3 = Color3.fromRGB(200, 140, 255)
+    spScanBtn.Font = Enum.Font.GothamBold
+    spScanBtn.TextSize = 10
+    spScanBtn.BorderSizePixel = 0
+    spScanBtn.ZIndex = 52
+    spScanBtn.Parent = scriptPanel
+    Instance.new("UICorner", spScanBtn).CornerRadius = UDim.new(0, 6)
+    local spScanStroke = Instance.new("UIStroke", spScanBtn)
+    spScanStroke.Color = Color3.fromRGB(180, 100, 255)
+    spScanStroke.Thickness = 1
+    spScanStroke.Transparency = 0.5
+
+    SafeConnect(spScanBtn.MouseButton1Click, function()
+        spScanBtn.Text = "Varrendo..."
+        ScanScripts()
+        RefreshScriptPanel()
+        spScanBtn.Text = "▶ SCAN SCRIPTS"
+        scriptsBtn.Text = "SCRIPTS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
+    end)
+
+    -- ScrollFrame de lista
+    local spScroll = Instance.new("ScrollingFrame")
+    spScroll.Name = "ScriptList"
+    spScroll.Size = UDim2.new(1, -10, 1, -78)
+    spScroll.Position = UDim2.new(0, 5, 0, 72)
+    spScroll.BackgroundTransparency = 1
+    spScroll.BorderSizePixel = 0
+    spScroll.ScrollBarThickness = 3
+    spScroll.ScrollBarImageColor3 = Color3.fromRGB(180, 100, 255)
+    spScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    spScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    spScroll.ZIndex = 51
+    spScroll.Parent = scriptPanel
+
+    local spListLayout = Instance.new("UIListLayout", spScroll)
+    spListLayout.Padding = UDim.new(0, 4)
+    spListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local spPad = Instance.new("UIPadding", spScroll)
+    spPad.PaddingTop = UDim.new(0, 4)
+    spPad.PaddingBottom = UDim.new(0, 6)
+
+    -- Funcao para popular o painel com os scripts capturados
+    RefreshScriptPanel = function()
+        -- limpa filhos existentes (exceto o layout e o padding)
+        for _, child in ipairs(spScroll:GetChildren()) do
+            if child:IsA("Frame") then
+                child:Destroy()
+            end
+        end
+
+        local scripts = RecordingData.Interactions.CapturedScripts
+        spCount.Text = tostring(#scripts) .. " scripts"
+        scriptsBtn.Text = "SCRIPTS (" .. tostring(#scripts) .. ")"
+
+        if #scripts == 0 then
+            local emptyLabel = Instance.new("TextLabel")
+            emptyLabel.Size = UDim2.new(1, -10, 0, 40)
+            emptyLabel.BackgroundTransparency = 1
+            emptyLabel.Text = "Nenhum script capturado ainda.\nUse o botao SCAN SCRIPTS."
+            emptyLabel.TextColor3 = Colors.TextSec
+            emptyLabel.Font = Enum.Font.Gotham
+            emptyLabel.TextSize = 10
+            emptyLabel.TextWrapped = true
+            emptyLabel.ZIndex = 52
+            emptyLabel.LayoutOrder = 1
+            emptyLabel.Parent = spScroll
+            return
+        end
+
+        for index, entry in ipairs(scripts) do
+            local card = Instance.new("Frame")
+            card.Size = UDim2.new(1, -6, 0, 132)
+            card.BackgroundColor3 = Colors.Surface
+            card.BorderSizePixel = 0
+            card.ZIndex = 52
+            card.LayoutOrder = index
+            card.Parent = spScroll
+            Instance.new("UICorner", card).CornerRadius = UDim.new(0, 6)
+
+            -- Barra lateral colorida por status de cripto
+            local statusBar = Instance.new("Frame")
+            statusBar.Size = UDim2.new(0, 3, 1, -8)
+            statusBar.Position = UDim2.new(0, 4, 0, 4)
+            statusBar.BorderSizePixel = 0
+            statusBar.ZIndex = 53
+            statusBar.Parent = card
+            Instance.new("UICorner", statusBar).CornerRadius = UDim.new(0, 2)
+
+            local statusColor
+            if entry.Encrypted == true then
+                statusColor = Color3.fromRGB(255, 80, 80)     -- vermelho = criptografado
+            elseif entry.Encrypted == "partial" then
+                statusColor = Color3.fromRGB(255, 160, 30)    -- laranja = suspeito
+            else
+                statusColor = Color3.fromRGB(30, 220, 120)    -- verde = legivel
+            end
+            statusBar.BackgroundColor3 = statusColor
+
+            -- Nome do script
+            local nameLabel = Instance.new("TextLabel")
+            nameLabel.Size = UDim2.new(1, -70, 0, 16)
+            nameLabel.Position = UDim2.new(0, 14, 0, 6)
+            nameLabel.BackgroundTransparency = 1
+            nameLabel.Text = entry.Name or "?"
+            nameLabel.TextColor3 = Colors.TextPri
+            nameLabel.Font = Enum.Font.GothamBold
+            nameLabel.TextSize = 10
+            nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+            nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+            nameLabel.ZIndex = 53
+            nameLabel.Parent = card
+
+            -- Badge de classe
+            local classBadge = Instance.new("TextLabel")
+            classBadge.Size = UDim2.new(0, 54, 0, 14)
+            classBadge.Position = UDim2.new(1, -60, 0, 6)
+            classBadge.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+            classBadge.BorderSizePixel = 0
+            classBadge.Text = entry.ClassName or "Script"
+            classBadge.TextColor3 = Color3.fromRGB(180, 100, 255)
+            classBadge.Font = Enum.Font.GothamBold
+            classBadge.TextSize = 8
+            classBadge.ZIndex = 53
+            classBadge.Parent = card
+            Instance.new("UICorner", classBadge).CornerRadius = UDim.new(0, 3)
+
+            -- Path (arquivo de origem)
+            local pathLabel = Instance.new("TextLabel")
+            pathLabel.Size = UDim2.new(1, -14, 0, 14)
+            pathLabel.Position = UDim2.new(0, 14, 0, 24)
+            pathLabel.BackgroundTransparency = 1
+            pathLabel.Text = "📄 " .. (entry.Path or "?")
+            pathLabel.TextColor3 = Colors.TextSec
+            pathLabel.Font = Enum.Font.Gotham
+            pathLabel.TextSize = 8
+            pathLabel.TextXAlignment = Enum.TextXAlignment.Left
+            pathLabel.TextTruncate = Enum.TextTruncate.AtEnd
+            pathLabel.ZIndex = 53
+            pathLabel.Parent = card
+
+            -- Status de criptografia
+            local cryptoText = entry.Encrypted == true and "🔒 CODIFICADO"
+                or entry.Encrypted == "partial" and "⚠ SUSPEITO"
+                or "✓ NORMAL"
+            local cryptoLabel = Instance.new("TextLabel")
+            cryptoLabel.Size = UDim2.new(0, 120, 0, 13)
+            cryptoLabel.Position = UDim2.new(0, 14, 0, 40)
+            cryptoLabel.BackgroundTransparency = 1
+            cryptoLabel.Text = cryptoText
+            cryptoLabel.TextColor3 = statusColor
+            cryptoLabel.Font = Enum.Font.GothamBold
+            cryptoLabel.TextSize = 8
+            cryptoLabel.TextXAlignment = Enum.TextXAlignment.Left
+            cryptoLabel.ZIndex = 53
+            cryptoLabel.Parent = card
+
+            -- Metodo de decode (se detectado)
+            if entry.DecodeMethod and entry.DecodeMethod ~= "plain" then
+                local decodeLabel = Instance.new("TextLabel")
+                decodeLabel.Size = UDim2.new(0, 120, 0, 13)
+                decodeLabel.Position = UDim2.new(0, 14, 0, 53)
+                decodeLabel.BackgroundTransparency = 1
+                decodeLabel.Text = "decode: " .. entry.DecodeMethod
+                decodeLabel.TextColor3 = Colors.TextMuted
+                decodeLabel.Font = Enum.Font.Gotham
+                decodeLabel.TextSize = 8
+                decodeLabel.TextXAlignment = Enum.TextXAlignment.Left
+                decodeLabel.ZIndex = 53
+                decodeLabel.Parent = card
+            end
+
+            local readText = entry.SourceReadable and ((entry.CodeLength or 0) .. " chars") or "metadata apenas"
+            local readLabel = Instance.new("TextLabel")
+            readLabel.Size = UDim2.new(0, 150, 0, 13)
+            readLabel.Position = UDim2.new(0, 140, 0, 40)
+            readLabel.BackgroundTransparency = 1
+            readLabel.Text = readText
+            readLabel.TextColor3 = Colors.TextSec
+            readLabel.Font = Enum.Font.Gotham
+            readLabel.TextSize = 8
+            readLabel.TextXAlignment = Enum.TextXAlignment.Left
+            readLabel.TextTruncate = Enum.TextTruncate.AtEnd
+            readLabel.ZIndex = 53
+            readLabel.Parent = card
+
+            local previewLabel = Instance.new("TextLabel")
+            previewLabel.Size = UDim2.new(1, -22, 0, 48)
+            previewLabel.Position = UDim2.new(0, 14, 0, 68)
+            previewLabel.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
+            previewLabel.BackgroundTransparency = 0.1
+            previewLabel.BorderSizePixel = 0
+            previewLabel.Text = entry.CodePreview or entry.Note or "Sem codigo legivel neste ambiente."
+            previewLabel.TextColor3 = Colors.TextSec
+            previewLabel.Font = Enum.Font.Code
+            previewLabel.TextSize = 8
+            previewLabel.TextXAlignment = Enum.TextXAlignment.Left
+            previewLabel.TextYAlignment = Enum.TextYAlignment.Top
+            previewLabel.TextWrapped = true
+            previewLabel.TextTruncate = Enum.TextTruncate.AtEnd
+            previewLabel.ZIndex = 53
+            previewLabel.Parent = card
+            Instance.new("UICorner", previewLabel).CornerRadius = UDim.new(0, 4)
+
+            local copyCodeBtn = Instance.new("TextButton")
+            copyCodeBtn.Size = UDim2.new(0, 58, 0, 16)
+            copyCodeBtn.Position = UDim2.new(1, -66, 0, 38)
+            copyCodeBtn.BackgroundColor3 = Color3.fromRGB(10, 60, 35)
+            copyCodeBtn.Text = "COPIAR"
+            copyCodeBtn.TextColor3 = Colors.Green
+            copyCodeBtn.Font = Enum.Font.GothamBold
+            copyCodeBtn.TextSize = 8
+            copyCodeBtn.BorderSizePixel = 0
+            copyCodeBtn.ZIndex = 54
+            copyCodeBtn.Parent = card
+            Instance.new("UICorner", copyCodeBtn).CornerRadius = UDim.new(0, 4)
+
+            SafeConnect(copyCodeBtn.MouseButton1Click, function()
+                local codeToCopy = entry.Code or entry.RawCode or entry.Note or ""
+                if setclipboard then
+                    setclipboard(codeToCopy)
+                    copyCodeBtn.Text = "OK"
+                    task.wait(1)
+                    copyCodeBtn.Text = "COPIAR"
+                else
+                    print(codeToCopy)
+                    copyCodeBtn.Text = "PRINT"
+                    task.wait(1)
+                    copyCodeBtn.Text = "COPIAR"
+                end
+            end)
+
+            -- Timestamp + source
+            local timeLabel = Instance.new("TextLabel")
+            timeLabel.Size = UDim2.new(1, -14, 0, 12)
+            timeLabel.Position = UDim2.new(0, 14, 1, -16)
+            timeLabel.BackgroundTransparency = 1
+            timeLabel.Text = (entry.Source or "?") .. " · " .. (entry.Time or "")
+            timeLabel.TextColor3 = Colors.TextMuted
+            timeLabel.Font = Enum.Font.Gotham
+            timeLabel.TextSize = 8
+            timeLabel.TextXAlignment = Enum.TextXAlignment.Left
+            timeLabel.TextTruncate = Enum.TextTruncate.AtEnd
+            timeLabel.ZIndex = 53
+            timeLabel.Parent = card
+        end
+    end
+
+    -- Abre/fecha painel ao clicar no botao SCRIPTS
+    SafeConnect(scriptsBtn.MouseButton1Click, function()
+        scriptPanel.Visible = not scriptPanel.Visible
+        if scriptPanel.Visible then
+            RefreshScriptPanel()
+            scriptsBtn.Text = "SCRIPTS ▲ FECHAR"
+        else
+            scriptsBtn.Text = "SCRIPTS (" .. tostring(#RecordingData.Interactions.CapturedScripts) .. ")"
+        end
+    end)
+
+    -- -- Referencias globais -------------------------------
+    DebugUI = {
+        stateVal      = stateVal,
+        stats         = statLabels,
+        scriptsBtn    = scriptsBtn,
+        scriptPanel   = scriptPanel,
+        spCount       = spCount,
+        refreshScripts = RefreshScriptPanel,
+    }
+end
+
+-- -----------------------------------------------------------
+-- REGISTRO DE INTERACOES DIRETAS DO JOGADOR
+-- (so captura o que o jogador realmente clicou/ativou)
+-- -----------------------------------------------------------
+
+-- Guarda os botoes da UI do jogo que o jogador clicou
+local PlayerInteractions = {
+    ClickedButtons = {},   -- { Name, Text, Parent, Time, State }
+    KeysPressed    = {},   -- { Key, Time, State }
+}
+
+local function TouchDirectInteraction()
+    LastDirectInteractionAt = os.clock()
+end
+
+local function IsInsideDirectInteractionWindow()
+    return (os.clock() - LastDirectInteractionAt) <= Config.RemoteInteractionWindow
+end
+
+local function IsInsideObservableInteractionWindow()
+    return (os.clock() - LastDirectInteractionAt) <= Config.ObservableInteractionWindow
+end
+
+local function IsInsidePlayerContainerWindow()
+    return (os.clock() - LastDirectInteractionAt) <= Config.PlayerContainerInteractionWindow
+end
+
+local function RegisterButtonClick(btn)
+    -- Ignora a propria UI do EZZ
+    if btn:FindFirstAncestorWhichIsA("ScreenGui") then
+        local sg = btn:FindFirstAncestorWhichIsA("ScreenGui")
+        if sg and sg.Name == "EZZ_Compact" then return end
+    end
+
+    local rawText = btn.Text ~= "" and btn.Text or btn.Name
+    local decodedText, decodeMethod = TryDecryptText(rawText)
+
+    local entry = {
+        Name   = btn.Name,
+        Text   = decodedText,
+        RawText = rawText,
+        DecodeMethod = decodeMethod,
+        Parent = btn.Parent and btn.Parent.Name or "?",
+        Time   = os.date("%H:%M:%S"),
+        State  = CurrentState,
+    }
+
+    -- Evita duplicatas consecutivas do mesmo botao no mesmo segundo
+    local last = PlayerInteractions.ClickedButtons[#PlayerInteractions.ClickedButtons]
+    if last and last.Name == entry.Name and last.Time == entry.Time then return end
+
+    if #PlayerInteractions.ClickedButtons >= Config.MaxClicks then
+        table.remove(PlayerInteractions.ClickedButtons, 1)
+    end
+
+    TouchDirectInteraction()
+    table.insert(PlayerInteractions.ClickedButtons, entry)
+
+    ClickCount = ClickCount + 1
+    if #RecordingData.Interactions.Clicks >= Config.MaxClicks then
+        table.remove(RecordingData.Interactions.Clicks, 1)
+    end
+
+    local targetKey = entry.Parent .. "/" .. entry.Name
+    table.insert(RecordingData.Interactions.Clicks, {
+        ID = ClickCount,
+        Type = "UI_BUTTON",
+        Target = entry.Text,
+        RawTarget = entry.RawText,
+        DecodeMethod = entry.DecodeMethod,
+        Name = entry.Name,
+        Parent = entry.Parent,
+        State = entry.State,
+        Time = entry.Time
+    })
+    RecordingData.Interactions.Summary.UniqueTargets[targetKey] = true
+    RecordingData.Interactions.Summary.TotalClicks = ClickCount
+
+    AddToTimeline("BTN_CLICK", { Button = entry.Text, State = entry.State })
+    Log("[CLICK] Botao clicado: [" .. entry.Text .. "] em " .. entry.Parent)
+end
+
+-- Conecta listener em todos os botoes do PlayerGui (exceto EZZ)
+local HookedButtons = {}
+
+local function HookAllButtons()
+    local gui = LocalPlayer.PlayerGui
+    for _, obj in pairs(gui:GetDescendants()) do
+        if obj:IsA("TextButton") or obj:IsA("ImageButton") then
+            if not HookedButtons[obj] then
+                local sg = obj:FindFirstAncestorWhichIsA("ScreenGui")
+                if sg and sg.Name ~= "EZZ_Compact" then
+                    HookedButtons[obj] = SafeConnect(obj.MouseButton1Click, function()
+                        RegisterButtonClick(obj)
+                    end)
+                end
+            end
+        end
+    end
+end
+
+-- Re-hookeia quando novos objetos aparecem (menus que abrem depois)
+local function WatchForNewButtons()
+    local gui = LocalPlayer.PlayerGui
+    SafeConnect(gui.DescendantAdded, function(obj)
+        task.wait(0.05) -- espera o objeto estar pronto
+        if (obj:IsA("TextButton") or obj:IsA("ImageButton")) and not HookedButtons[obj] then
+            local sg = obj:FindFirstAncestorWhichIsA("ScreenGui")
+            if sg and sg.Name ~= "EZZ_Compact" then
+                HookedButtons[obj] = SafeConnect(obj.MouseButton1Click, function()
+                    RegisterButtonClick(obj)
+                end)
+            end
+        end
+    end)
+
+    -- Limpa conexoes de objetos removidos
+    SafeConnect(gui.DescendantRemoving, function(obj)
+        if HookedButtons[obj] then
+            HookedButtons[obj]:Disconnect()
+            HookedButtons[obj] = nil
+        end
+    end)
+end
+
+-- Captura teclas premidas pelo jogador (movimento, acoes)
+local function MonitorKeys()
+    SafeConnect(UserInputService.InputBegan, function(input, gameProcessed)
+        -- Ignora se foi capturado pelo jogo (ex: chat)
+        if gameProcessed then return end
+
+        if Config.EnableUiToggleHotkey and input.KeyCode == Config.UiToggleKey then
+            local gui = LocalPlayer.PlayerGui:FindFirstChild("EZZ_Compact")
+            if gui then
+                gui.Enabled = not gui.Enabled
+            end
+            return
+        end
+
+        local keyName = input.KeyCode.Name
+        -- Filtra teclas irrelevantes (movimentos comuns)
+        local ignore = { W=true, A=true, S=true, D=true, Space=true, LeftShift=true }
+        if ignore[keyName] then return end
+
+        if #PlayerInteractions.KeysPressed >= 50 then
+            table.remove(PlayerInteractions.KeysPressed, 1)
+        end
+
+        TouchDirectInteraction()
+        table.insert(PlayerInteractions.KeysPressed, {
+            Key   = keyName,
+            Time  = os.date("%H:%M:%S"),
+            State = CurrentState,
+        })
+
+        AddToTimeline("KEY", { Key = keyName, State = CurrentState })
+        Log("[KEY] Tecla: " .. keyName)
+    end)
+end
+
+local function MonitorChatCommands()
+    if not Config.EnableChatCommandCapture then return end
+
+    SafeConnect(LocalPlayer.Chatted, function(message)
+        if type(message) ~= "string" or message:sub(1, 1) ~= "/" then return end
+
+        if #RecordingData.Interactions.ChatCommands >= Config.MaxChatCommands then
+            table.remove(RecordingData.Interactions.ChatCommands, 1)
+        end
+
+        local entry = {
+            Message = message,
+            Time = os.date("%H:%M:%S"),
+            State = CurrentState
+        }
+
+        table.insert(RecordingData.Interactions.ChatCommands, entry)
+        AddToTimelineDebounced("CHAT_CMD", {Message = message}, {message}, Config.DebounceCooldown)
+    end)
+end
+
+-- Retorna resumo das interacoes para o CaptureCurrentState
+local function GetInteractionSnapshot()
+    return {
+        Buttons = PlayerInteractions.ClickedButtons,
+        Keys    = PlayerInteractions.KeysPressed,
+    }
+end
+
+local function ScanImportantUI()
+    local snapshot = GetInteractionSnapshot()
+    return {
+        Buttons = snapshot.Buttons,
+        Labels = snapshot.Keys,
+    }
+end
+
+-- -----------------------------------------------------------
+-- OBSERVAR OBJETOS, ATRIBUTOS E VALORES PUBLICOS
+-- -----------------------------------------------------------
+local WatchedValueObjects = {}
+local WatchedAttributeObjects = {}
+local WatchedPlayerContainers = {}
+local HookedClickDetectors = {}
+local HookedTouchParts = {}
+local AttributeWatchCount = 0
+local ValueWatchCount = 0
+local IsNPCObject
+local GetObjectPath
+local GetAttributesSnapshot
+local GetTagsSnapshot
+
+local IdentifierKeyPatterns = {
+    "id",
+    "uid",
+    "uuid",
+    "guid",
+    "serial",
+    "owner",
+    "user",
+    "player",
+    "plant",
+    "fruit",
+    "item",
+    "tool",
+    "pet",
+    "skin",
+    "seed",
+    "mutation",
+    "variant",
+    "rarity",
+}
+
+local InterestingNamePatterns = {
+    "prompt",
+    "harvest",
+    "steal",
+    "collect",
+    "pickup",
+    "fruit",
+    "plant",
+    "item",
+    "tool",
+    "pet",
+    "npc",
+    "quest",
+    "shop",
+    "reward",
+    "inventory",
+}
+
+local function SerializeValue(value)
+    local valueType = typeof(value)
+    if valueType == "nil" or valueType == "number" or valueType == "string" or valueType == "boolean" then
+        if (valueType == "number" or valueType == "string") and IsRobloxAssetID(value) then
+            return {
+                Value = value,
+                PossibleRobloxAssetId = true
+            }
+        end
+        return value
+    end
+    if valueType == "Instance" then
+        return value:GetFullName()
+    end
+    if valueType == "Vector3" then
+        if not Config.IncludeObjectCoordinates then return nil end
+        return { X = value.X, Y = value.Y, Z = value.Z }
+    end
+    if valueType == "CFrame" then
+        if not Config.IncludeObjectCoordinates then return nil end
+        return tostring(value.Position)
+    end
+    if valueType == "Color3" then
+        return { R = value.R, G = value.G, B = value.B }
+    end
+    return tostring(value)
+end
+
+local function SerializeRemoteArg(value, depth)
+    depth = depth or 0
+    if depth >= Config.MaxRemoteArgDepth then
+        return "<max_depth>"
+    end
+
+    local valueType = typeof(value)
+    if valueType == "string" then
+        local trimmed = value:match("^%s*(.-)%s*$")
+        if trimmed and (trimmed:sub(1, 1) == "{" or trimmed:sub(1, 1) == "[") then
+            local ok, decoded = pcall(function()
+                return HttpService:JSONDecode(trimmed)
+            end)
+            if ok then
+                return {
+                    __json = true,
+                    Raw = value,
+                    Data = SerializeRemoteArg(decoded, depth + 1)
+                }
+            end
+        end
+    end
+
+    if valueType == "Instance" then
+        local instanceSnapshot = {
+            Type = "Instance",
+            Name = value.Name,
+            ClassName = value.ClassName,
+            Path = GetObjectPath and GetObjectPath(value) or value.Name,
+            Attributes = GetAttributesSnapshot and GetAttributesSnapshot(value) or {},
+            Tags = GetTagsSnapshot and GetTagsSnapshot(value) or {},
+        }
+
+        if value:IsA("ValueBase") then
+            instanceSnapshot.Value = SerializeValue(value.Value)
+        end
+
+        if value:IsA("LuaSourceContainer") then
+            instanceSnapshot.ScriptLike = true
+            instanceSnapshot.SourceReadable = false
+            instanceSnapshot.Note = "Source nao fica disponivel para leitura normal em runtime."
+        end
+
+        return instanceSnapshot
+    end
+
+    if valueType == "table" then
+        local output = {}
+        local count = 0
+        for key, nestedValue in pairs(value) do
+            count = count + 1
+            if count > Config.MaxRemoteArgs then
+                output.__truncated = true
+                break
+            end
+            output[tostring(key)] = SerializeRemoteArg(nestedValue, depth + 1)
+        end
+        return output
+    end
+
+    return SerializeValue(value)
+end
+
+local function SerializeRemoteArgs(args, argCount)
+    local output = {}
+    local totalArgs = argCount or #args
+    for index = 1, math.min(totalArgs, Config.MaxRemoteArgs) do
+        output[index] = SerializeRemoteArg(args[index], 0)
+    end
+    if totalArgs > Config.MaxRemoteArgs then
+        output.Truncated = true
+        output.TotalArgs = totalArgs
+    end
+    return output
+end
+
+local function TruncateString(value, maxLength)
+    if type(value) ~= "string" then return value end
+    if #value <= maxLength then return value end
+    return value:sub(1, maxLength) .. "...<truncated>"
+end
+
+local function SerializeHttpPayload(value)
+    if type(value) == "string" then
+        local limited = TruncateString(value, Config.MaxHttpBodyChars)
+        local trimmed = limited:match("^%s*(.-)%s*$")
+        if trimmed and (trimmed:sub(1, 1) == "{" or trimmed:sub(1, 1) == "[") then
+            local ok, decoded = pcall(function()
+                return HttpService:JSONDecode(trimmed)
+            end)
+            if ok then
+                return {
+                    __json = true,
+                    Raw = limited,
+                    Data = SerializeRemoteArg(decoded, 0)
+                }
+            end
+        end
+        return limited
+    end
+
+    return SerializeRemoteArg(value, 0)
+end
+
+local function RegisterHttpCall(method, args, argCount, result)
+    if not Config.EnableHttpHooks then return end
+
+    HttpRequestCount = HttpRequestCount + 1
+    if #RecordingData.Interactions.HttpRequests >= Config.MaxHttpCalls then
+        table.remove(RecordingData.Interactions.HttpRequests, 1)
+    end
+
+    local url = nil
+    local requestBody = nil
+    local requestOptions = nil
+
+    if method == "RequestAsync" and type(args[1]) == "table" then
+        requestOptions = SerializeRemoteArg(args[1], 0)
+        url = args[1].Url or args[1].url
+        requestBody = args[1].Body or args[1].body
+    else
+        url = args[1]
+        if method == "PostAsync" then
+            requestBody = args[2]
+        end
+    end
+
+    local entry = {
+        ID = HttpRequestCount,
+        Method = method,
+        URL = tostring(url or ""),
+        ArgCount = argCount,
+        Request = requestOptions,
+        RequestBody = SerializeHttpPayload(requestBody),
+        Response = SerializeHttpPayload(result),
+        Time = os.date("%H:%M:%S"),
+        State = CurrentState
+    }
+
+    table.insert(RecordingData.Interactions.HttpRequests, entry)
+    RecordingData.Interactions.Summary.TotalHttpRequests = HttpRequestCount
+    AddToTimelineDebounced("HTTP_" .. method, {URL = entry.URL}, {entry.URL, method}, Config.DebounceCooldown)
+end
+
+local function BuildRemoteSummary(instance)
+    local decodedName, decodeMethod = TryDecryptText(instance.Name)
+    return {
+        Name = decodedName,
+        RawName = instance.Name,
+        DecodeMethod = decodeMethod,
+        ClassName = instance.ClassName,
+        Path = GetObjectPath(instance),
+        Attributes = GetAttributesSnapshot(instance),
+        Tags = GetTagsSnapshot(instance),
+    }
+end
+
+local function BuildRemoteTree(remote)
+    local tree = {
+        Parent = remote.Parent and BuildRemoteSummary(remote.Parent) or nil,
+        Children = {},
+        SiblingRemotes = {},
+        NearbyRemoteDescendants = {},
+    }
+
+    local childCount = 0
+    for _, child in ipairs(remote:GetChildren()) do
+        childCount = childCount + 1
+        if childCount > Config.MaxRemoteTreeItems then
+            tree.ChildrenTruncated = true
+            break
+        end
+        table.insert(tree.Children, BuildRemoteSummary(child))
+    end
+
+    if remote.Parent then
+        local siblingCount = 0
+        for _, sibling in ipairs(remote.Parent:GetChildren()) do
+            if sibling ~= remote and (sibling:IsA("RemoteEvent") or sibling:IsA("RemoteFunction")) then
+                siblingCount = siblingCount + 1
+                if siblingCount > Config.MaxRemoteTreeItems then
+                    tree.SiblingRemotesTruncated = true
+                    break
+                end
+                table.insert(tree.SiblingRemotes, BuildRemoteSummary(sibling))
+            end
+        end
+
+        local descendantCount = 0
+        for _, descendant in ipairs(remote.Parent:GetDescendants()) do
+            if descendant ~= remote and (descendant:IsA("RemoteEvent") or descendant:IsA("RemoteFunction")) then
+                descendantCount = descendantCount + 1
+                if descendantCount > Config.MaxRemoteTreeItems then
+                    tree.NearbyRemoteDescendantsTruncated = true
+                    break
+                end
+                table.insert(tree.NearbyRemoteDescendants, BuildRemoteSummary(descendant))
+            end
+        end
+    end
+
+    return tree
+end
+
+local function BuildValueSummary(valueObject)
+    local decodedName, decodeMethod = TryDecryptText(valueObject.Name)
+    return {
+        Name = decodedName,
+        RawName = valueObject.Name,
+        DecodeMethod = decodeMethod,
+        ClassName = valueObject.ClassName,
+        Path = GetObjectPath(valueObject),
+        Value = SerializeValue(valueObject.Value),
+        Attributes = GetAttributesSnapshot(valueObject),
+        Tags = GetTagsSnapshot(valueObject),
+    }
+end
+
+local function BuildScriptSummary(scriptObject)
+    local decodedName, decodeMethod = TryDecryptText(scriptObject.Name)
+    return {
+        Name = decodedName,
+        RawName = scriptObject.Name,
+        DecodeMethod = decodeMethod,
+        ClassName = scriptObject.ClassName,
+        Path = GetObjectPath(scriptObject),
+        Attributes = GetAttributesSnapshot(scriptObject),
+        Tags = GetTagsSnapshot(scriptObject),
+        SourceReadable = false,
+        Note = "Script encontrado como instancia; Source nao fica disponivel para leitura normal em runtime.",
+    }
+end
+
+local function BuildRemoteContext(remote)
+    local context = {
+        Ancestors = {},
+        NearbyValues = {},
+        NearbyScripts = {},
+    }
+
+    local ancestor = remote.Parent
+    local ancestorDepth = 0
+    while ancestor and ancestorDepth < Config.MaxRemoteAncestorDepth do
+        ancestorDepth = ancestorDepth + 1
+        table.insert(context.Ancestors, BuildRemoteSummary(ancestor))
+        ancestor = ancestor.Parent
+    end
+
+    local contextRoot = remote.Parent
+    if contextRoot then
+        local valueCount = 0
+        local scriptCount = 0
+
+        for _, descendant in ipairs(contextRoot:GetDescendants()) do
+            if descendant:IsA("ValueBase") then
+                valueCount = valueCount + 1
+                if valueCount > Config.MaxRemoteContextValues then
+                    context.NearbyValuesTruncated = true
+                else
+                    table.insert(context.NearbyValues, BuildValueSummary(descendant))
+                end
+            elseif descendant:IsA("LuaSourceContainer") then
+                scriptCount = scriptCount + 1
+                if scriptCount > Config.MaxRemoteContextScripts then
+                    context.NearbyScriptsTruncated = true
+                else
+                    table.insert(context.NearbyScripts, BuildScriptSummary(descendant))
+                end
+            end
+
+            if context.NearbyValuesTruncated and context.NearbyScriptsTruncated then
+                break
+            end
+        end
+    end
+
+    return context
+end
+
+function GetObjectPath(obj)
+    local ok, path = pcall(function()
+        return obj:GetFullName()
+    end)
+    return ok and path or obj.Name
+end
+
+local function GetObjectPosition(obj)
+    if obj:IsA("BasePart") then
+        return SerializeValue(obj.Position)
+    end
+    if obj:IsA("Model") then
+        local ok, pivot = pcall(function()
+            return obj:GetPivot()
+        end)
+        if ok then
+            return SerializeValue(pivot.Position)
+        end
+    end
+    return nil
+end
+
+function GetAttributesSnapshot(obj)
+    local attributes = {}
+    local ok, source = pcall(function()
+        return obj:GetAttributes()
+    end)
+    if not ok then return attributes end
+
+    for key, value in pairs(source) do
+        attributes[key] = SerializeValue(value)
+    end
+    return attributes
+end
+
+local function KeyLooksLikeIdentifier(key)
+    local lowerKey = tostring(key):lower()
+    for _, pattern in ipairs(IdentifierKeyPatterns) do
+        if lowerKey:find(pattern, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function NameLooksInteresting(name)
+    local lowerName = tostring(name):lower()
+    for _, pattern in ipairs(InterestingNamePatterns) do
+        if lowerName:find(pattern, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function ExtractIdentifiersFromAttributes(attributes)
+    local identifiers = {}
+    for key, value in pairs(attributes) do
+        if KeyLooksLikeIdentifier(key) then
+            identifiers[key] = value
+        end
+    end
+    return identifiers
+end
+
+local function ExtractIdentifiersFromValueObject(obj)
+    if not obj:IsA("ValueBase") then return {} end
+    if not KeyLooksLikeIdentifier(obj.Name) and not NameLooksInteresting(obj.Name) then return {} end
+
+    return {
+        [obj.Name] = SerializeValue(obj.Value)
+    }
+end
+
+local function ExtractIdentifiersFromText(label, text)
+    local identifiers = {}
+    if type(text) ~= "string" or text == "" then return identifiers end
+
+    local uuid = text:match("%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x")
+    if uuid then
+        identifiers[label .. "UUID"] = uuid
+    end
+
+    local longNumber = text:match("%f[%d]%d%d%d%d%d%d%d%d%d+%f[%D]")
+    if longNumber then
+        identifiers[label .. "NumericId"] = longNumber
+    end
+
+    local composite = text:match("[%w]+_[%w%-]+")
+    if composite and (#composite >= 12 or composite:find("%-")) then
+        identifiers[label .. "CompositeId"] = composite
+    end
+
+    return identifiers
+end
+
+local function MergeIdentifiers(target, source)
+    for key, value in pairs(source) do
+        target[key] = value
+    end
+end
+
+function GetTagsSnapshot(obj)
+    local ok, tags = pcall(function()
+        return CollectionService:GetTags(obj)
+    end)
+    return ok and tags or {}
+end
+
+local function ObjectLooksWorthRecording(obj)
+    if obj:IsA("ProximityPrompt") or obj:IsA("ValueBase") or obj:IsA("LuaSourceContainer") then
+        return true
+    end
+
+    if IsNPCObject(obj) then
+        return true
+    end
+
+    local attributes = GetAttributesSnapshot(obj)
+    for key in pairs(attributes) do
+        if KeyLooksLikeIdentifier(key) then
+            return true
+        end
+    end
+
+    local tags = GetTagsSnapshot(obj)
+    return #tags > 0
+end
+
+local function ObjectLooksWorthWatching(obj)
+    return ObjectLooksWorthRecording(obj) or NameLooksInteresting(obj.Name)
+end
+
+function IsNPCObject(obj)
+    if obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+        return true
+    end
+
+    local model = obj:FindFirstAncestorOfClass("Model")
+    return model and model:FindFirstChildOfClass("Humanoid") and Players:GetPlayerFromCharacter(model) == nil
+end
+
+local function FindRelatedPrompt(obj)
+    if obj:IsA("ProximityPrompt") then return obj end
+
+    local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt then return prompt end
+
+    local parent = obj.Parent
+    if parent then
+        return parent:FindFirstChildWhichIsA("ProximityPrompt", true)
+    end
+
+    return nil
+end
+
+local function BuildObjectSnapshot(obj)
+    local name, decodeMethod = TryDecryptText(obj.Name)
+    local prompt = FindRelatedPrompt(obj)
+    local attributes = GetAttributesSnapshot(obj)
+    local attributeIdentifiers = ExtractIdentifiersFromAttributes(attributes)
+    local valueIdentifiers = ExtractIdentifiersFromValueObject(obj)
+    local tags = GetTagsSnapshot(obj)
+    local objectPath = GetObjectPath(obj)
+    local parentPath = obj.Parent and GetObjectPath(obj.Parent) or nil
+    local identifiers = attributeIdentifiers
+    MergeIdentifiers(identifiers, ExtractIdentifiersFromText("Name", obj.Name))
+    MergeIdentifiers(identifiers, ExtractIdentifiersFromText("Path", objectPath))
+
+    local snapshot = {
+        Name = name,
+        RawName = obj.Name,
+        DecodeMethod = decodeMethod,
+        ClassName = obj.ClassName,
+        Path = objectPath,
+        Parent = parentPath,
+        Tags = tags,
+        Attributes = attributes,
+        Identifiers = identifiers,
+        IsNPC = IsNPCObject(obj),
+    }
+
+    if obj:IsA("ValueBase") then
+        snapshot.Value = SerializeValue(obj.Value)
+        for key, value in pairs(valueIdentifiers) do
+            snapshot.Identifiers[key] = value
+        end
+    end
+
+    if Config.IncludeObjectCoordinates then
+        snapshot.Position = GetObjectPosition(obj)
+    end
+
+    if prompt then
+        snapshot.Prompt = {
+            Name = prompt.Name,
+            ActionText = prompt.ActionText,
+            ObjectText = prompt.ObjectText,
+            Enabled = prompt.Enabled,
+            HoldDuration = prompt.HoldDuration,
+            MaxActivationDistance = prompt.MaxActivationDistance,
+        }
+    end
+
+    if obj:IsA("LuaSourceContainer") then
+        snapshot.ScriptLike = true
+        snapshot.SourceReadable = false
+        snapshot.Note = "Source de Script/LocalScript/ModuleScript nao fica disponivel para leitura normal em runtime."
+    end
+
+    return snapshot
+end
+
+local function AddObservableChange(changeType, obj, extra, forceRecord)
+    if Config.DirectInteractionOnly and not forceRecord and not IsInsideObservableInteractionWindow() then return end
+    if not obj then return end
+
+    local ezzGui = LocalPlayer.PlayerGui:FindFirstChild("EZZ_Compact")
+    if ezzGui and obj:IsDescendantOf(ezzGui) then return end
+
+    if (changeType == "ADDED" or changeType == "REMOVED") and not ObjectLooksWorthRecording(obj) then
+        return
+    end
+
+    if changeType == "ATTRIBUTE_CHANGED" and extra and extra.Attribute then
+        if not KeyLooksLikeIdentifier(extra.Attribute) and not ObjectLooksWorthRecording(obj) then
+            return
+        end
+    end
+
+    ObservableChangeCount = ObservableChangeCount + 1
+    if #RecordingData.Interactions.ObservableChanges >= Config.MaxObservableChanges then
+        table.remove(RecordingData.Interactions.ObservableChanges, 1)
+    end
+
+    local entry = BuildObjectSnapshot(obj)
+    entry.ID = ObservableChangeCount
+    entry.Type = changeType
+    entry.State = CurrentState
+    entry.Time = os.date("%H:%M:%S")
+
+    if extra then
+        for key, value in pairs(extra) do
+            entry[key] = SerializeValue(value)
+        end
+    end
+
+    table.insert(RecordingData.Interactions.ObservableChanges, entry)
+    RecordingData.Interactions.Summary.TotalObservableChanges = ObservableChangeCount
+    AddToTimeline("OBSERVED_" .. changeType, {Name = entry.Name, ClassName = entry.ClassName})
+end
+
+local function AddWorldInteraction(interactionType, obj, extra)
+    if not obj then return end
+
+    local path = GetObjectPath(obj)
+    local debounceParts = {interactionType, path}
+    if extra and extra.Player then
+        table.insert(debounceParts, extra.Player)
+    end
+    if ShouldDebounce(BuildDebounceKey("WORLD_" .. interactionType, debounceParts), Config.DebounceCooldown) then
+        return
+    end
+
+    WorldInteractionCount = WorldInteractionCount + 1
+    if #RecordingData.Interactions.WorldInteractions >= Config.MaxWorldInteractions then
+        table.remove(RecordingData.Interactions.WorldInteractions, 1)
+    end
+
+    local entry = BuildObjectSnapshot(obj)
+    entry.ID = WorldInteractionCount
+    entry.Type = interactionType
+    entry.Time = os.date("%H:%M:%S")
+    entry.State = CurrentState
+
+    if extra then
+        for key, value in pairs(extra) do
+            entry[key] = SerializeValue(value)
+        end
+    end
+
+    table.insert(RecordingData.Interactions.WorldInteractions, entry)
+    RecordingData.Interactions.Summary.TotalWorldInteractions = WorldInteractionCount
+    AddToTimeline("WORLD_" .. interactionType, {Path = path, ClassName = obj.ClassName})
+end
+
+local function WatchValueObject(obj)
+    if WatchedValueObjects[obj] or not obj:IsA("ValueBase") then return end
+    if ValueWatchCount >= Config.MaxObservedValueWatches then return end
+    if not ObjectLooksWorthWatching(obj) then return end
+
+    ValueWatchCount = ValueWatchCount + 1
+    WatchedValueObjects[obj] = SafeConnect(obj.Changed, function(newValue)
+        AddObservableChange("VALUE_CHANGED", obj, { Value = newValue })
+    end)
+end
+
+local function WatchAttributes(obj)
+    if WatchedAttributeObjects[obj] then return end
+    if AttributeWatchCount >= Config.MaxObservedAttributeWatches then return end
+    if not ObjectLooksWorthWatching(obj) then return end
+
+    local ok, connection = pcall(function()
+        return SafeConnect(obj.AttributeChanged, function(attributeName)
+            AddObservableChange("ATTRIBUTE_CHANGED", obj, {
+                Attribute = attributeName,
+                Value = obj:GetAttribute(attributeName)
+            })
+        end)
+    end)
+
+    if ok and connection then
+        AttributeWatchCount = AttributeWatchCount + 1
+        WatchedAttributeObjects[obj] = connection
+    end
+end
+
+local function HookClickDetector(detector)
+    if not Config.EnableClickDetectorMonitor or HookedClickDetectors[detector] then return end
+
+    HookedClickDetectors[detector] = SafeConnect(detector.MouseClick, function(player)
+        AddWorldInteraction("CLICK_DETECTOR", detector, {
+            Player = player and player.Name or "Unknown"
+        })
+    end)
+end
+
+local function HookTouchInterest(touchInterest)
+    if not Config.EnableTouchInterestMonitor then return end
+
+    local part = touchInterest.Parent
+    if not part or not part:IsA("BasePart") or HookedTouchParts[part] then return end
+
+    HookedTouchParts[part] = SafeConnect(part.Touched, function(hit)
+        local character = hit and hit:FindFirstAncestorOfClass("Model")
+        local player = character and Players:GetPlayerFromCharacter(character)
+        AddWorldInteraction("TOUCH_INTEREST", part, {
+            Hit = hit and hit.Name or "Unknown",
+            Player = player and player.Name or nil
+        })
+    end)
+end
+
+local function MonitorWorldInteractives()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("ClickDetector") then
+            HookClickDetector(obj)
+        elseif obj.Name == "TouchInterest" then
+            HookTouchInterest(obj)
+        end
+    end
+end
+
+local function IsSuspiciousValueObject(obj)
+    if not (obj:IsA("StringValue") or obj:IsA("NumberValue") or obj:IsA("IntValue")) then
+        return false
+    end
+
+    local name = obj.Name:lower()
+    return name:find("id", 1, true)
+        or name:find("price", 1, true)
+        or name:find("cost", 1, true)
+        or name:find("value", 1, true)
+        or name:find("amount", 1, true)
+        or name:find("coin", 1, true)
+        or name:find("gem", 1, true)
+        or name:find("cash", 1, true)
+end
+
+local function MonitorPeriodicValueScan()
+    if not Config.EnablePeriodicValueScan then return end
+
+    task.spawn(function()
+        while task.wait(Config.PeriodicValueScanInterval) do
+            local recorded = 0
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                if IsSuspiciousValueObject(obj) then
+                    recorded = recorded + 1
+                    if recorded > Config.MaxPeriodicScanResults then
+                        break
+                    end
+                    AddObservableChange("PERIODIC_SCAN", obj, nil, true)
+                end
+            end
+        end
+    end)
+end
+
+local function DisconnectIfRemoved(connectionTable)
+    for obj, connection in pairs(connectionTable) do
+        if typeof(obj) ~= "Instance" or obj.Parent == nil then
+            if connection then
+                pcall(function()
+                    connection:Disconnect()
+                end)
+            end
+            connectionTable[obj] = nil
+        end
+    end
+end
+
+local function DisconnectContainerWatchersIfRemoved()
+    for obj, connections in pairs(WatchedPlayerContainers) do
+        if typeof(obj) ~= "Instance" or obj.Parent == nil then
+            if type(connections) == "table" then
+                for _, connection in pairs(connections) do
+                    pcall(function()
+                        connection:Disconnect()
+                    end)
+                end
+            end
+            WatchedPlayerContainers[obj] = nil
+        end
+    end
+end
+
+local function CleanupDebounceTable()
+    local now = os.clock()
+    for key, timestamp in pairs(DebounceTable) do
+        if now - timestamp > 120 then
+            DebounceTable[key] = nil
+        end
+    end
+end
+
+local function MonitorConnectionCleanup()
+    task.spawn(function()
+        while task.wait(60) do
+            DisconnectIfRemoved(WatchedValueObjects)
+            DisconnectIfRemoved(WatchedAttributeObjects)
+            DisconnectIfRemoved(HookedClickDetectors)
+            DisconnectIfRemoved(HookedTouchParts)
+            DisconnectContainerWatchersIfRemoved()
+            CleanupDebounceTable()
+        end
+    end)
+end
+
+local function MonitorObservableChanges()
+    local roots = { Workspace, LocalPlayer.PlayerGui }
+
+    for _, root in ipairs(roots) do
+        for _, obj in ipairs(root:GetDescendants()) do
+            WatchValueObject(obj)
+            WatchAttributes(obj)
+        end
+
+        SafeConnect(root.DescendantAdded, function(obj)
+            task.wait(0.05)
+            WatchValueObject(obj)
+            WatchAttributes(obj)
+            if obj:IsA("ClickDetector") then
+                HookClickDetector(obj)
+            elseif obj.Name == "TouchInterest" then
+                HookTouchInterest(obj)
+            end
+            AddObservableChange("ADDED", obj)
+        end)
+
+        SafeConnect(root.DescendantRemoving, function(obj)
+            AddObservableChange("REMOVED", obj)
+            if WatchedValueObjects[obj] then
+                WatchedValueObjects[obj]:Disconnect()
+                WatchedValueObjects[obj] = nil
+                ValueWatchCount = math.max(0, ValueWatchCount - 1)
+            end
+            if WatchedAttributeObjects[obj] then
+                WatchedAttributeObjects[obj]:Disconnect()
+                WatchedAttributeObjects[obj] = nil
+                AttributeWatchCount = math.max(0, AttributeWatchCount - 1)
+            end
+            if HookedClickDetectors[obj] then
+                HookedClickDetectors[obj]:Disconnect()
+                HookedClickDetectors[obj] = nil
+            end
+            if HookedTouchParts[obj] then
+                HookedTouchParts[obj]:Disconnect()
+                HookedTouchParts[obj] = nil
+            end
+        end)
+    end
+end
+
+local CurrentCharacterWatcher = nil
+
+local function IsPlayerContainerObject(obj)
+    return obj:IsA("Tool")
+        or obj:IsA("HopperBin")
+        or obj:IsA("ValueBase")
+        or obj:IsA("LuaSourceContainer")
+        or NameLooksInteresting(obj.Name)
+        or ObjectLooksWorthRecording(obj)
+end
+
+local function WatchPlayerContainer(container, label)
+    if not container or WatchedPlayerContainers[container] then return end
+
+    WatchedPlayerContainers[container] = {
+        Added = SafeConnect(container.ChildAdded, function(obj)
+            task.wait(0.05)
+            WatchValueObject(obj)
+            WatchAttributes(obj)
+
+            local forceRecord = label == "Backpack" or label == "Character" or IsInsidePlayerContainerWindow()
+            if IsPlayerContainerObject(obj) then
+                AddObservableChange(label .. "_ADDED", obj, { Container = label }, forceRecord)
+            end
+        end),
+        Removed = SafeConnect(container.ChildRemoved, function(obj)
+            local forceRecord = label == "Backpack" or label == "Character" or IsInsidePlayerContainerWindow()
+            if IsPlayerContainerObject(obj) then
+                AddObservableChange(label .. "_REMOVED", obj, { Container = label }, forceRecord)
+            end
+        end)
+    }
+
+    for _, obj in ipairs(container:GetChildren()) do
+        WatchValueObject(obj)
+        WatchAttributes(obj)
+    end
+end
+
+local function WatchCharacter(character)
+    if CurrentCharacterWatcher then
+        CurrentCharacterWatcher:Disconnect()
+        CurrentCharacterWatcher = nil
+    end
+
+    WatchPlayerContainer(character, "Character")
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        CurrentCharacterWatcher = SafeConnect(humanoid.Died, function()
+            AddObservableChange("CHARACTER_DIED", character, { Container = "Character" }, true)
+        end)
+    end
+end
+
+local function MonitorPlayerContainers()
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:WaitForChild("Backpack", 5)
+    if backpack then
+        WatchPlayerContainer(backpack, "Backpack")
+    end
+
+    if LocalPlayer.Character then
+        WatchCharacter(LocalPlayer.Character)
+    end
+
+    SafeConnect(LocalPlayer.CharacterAdded, function(character)
+        task.wait(0.2)
+        WatchCharacter(character)
+        AddObservableChange("CHARACTER_ADDED", character, { Container = "Character" }, true)
+    end)
+end
+
+-- -----------------------------------------------------------
+-- DETECTAR ESTADO
+-- -----------------------------------------------------------
+local function DetectGameState()
+    if (os.clock() - LastStateDetectAt) < Config.StateDetectThrottle then
+        return LastDetectedState ~= "UNKNOWN" and LastDetectedState or CurrentState
+    end
+    LastStateDetectAt = os.clock()
+
+    local state = "UNKNOWN"
+    local gui = LocalPlayer.PlayerGui
+    local visibleTexts = {}
+
+    for _, obj in pairs(gui:GetDescendants()) do
+        local screenGui = obj:FindFirstAncestorWhichIsA("ScreenGui")
+        if screenGui and screenGui.Name == "EZZ_Compact" then
+            continue
+        end
+
+        if (obj:IsA("TextButton") or obj:IsA("TextLabel")) and obj.Visible then
+            local text = obj.Text:upper()
+            table.insert(visibleTexts, text)
+            if text:find("PLAY") or text:find("JOGAR") then state = "MAIN_MENU" end
+            if text:find("PRONTO") or text:find("READY") or text:find("SITE DE TRABALHO") then state = "LOBBY" end
+        end
+    end
+
+    if Config.EnablePatternStateDetection then
+        local bestState = state
+        local bestScore = 0
+
+        for candidateState, patterns in pairs(Config.StatePatterns) do
+            local score = 0
+
+            for _, uiPattern in ipairs(patterns.UI or {}) do
+                local upperPattern = tostring(uiPattern):upper()
+                for _, text in ipairs(visibleTexts) do
+                    if text:find(upperPattern, 1, true) then
+                        score = score + 1
+                        break
+                    end
+                end
+            end
+
+            for _, workspacePattern in ipairs(patterns.Workspace or {}) do
+                if Workspace:FindFirstChild(workspacePattern, true) then
+                    score = score + 1
+                end
+            end
+
+            if score > bestScore then
+                bestScore = score
+                bestState = candidateState
+            end
+        end
+
+        if bestScore > 0 then
+            state = bestState
+        end
+    elseif Workspace:FindFirstChild("Ghost") then
+        state = "IN_GAME"
+    end
+
+    if state ~= CurrentState and state ~= "UNKNOWN" then
+        AddToTimeline("STATE_CHANGE", {From = CurrentState, To = state})
+        CurrentState = state
+    end
+
+    LastDetectedState = state
+    return state
+end
+
+-- -----------------------------------------------------------
+-- CAPTURA DO ESTADO ATUAL
+-- -----------------------------------------------------------
+function CaptureCurrentState()
+    local state = DetectGameState()
+    local ui = ScanImportantUI()
+    local observed = RecordingData.Interactions.ObservableChanges
+
+    if state == "MAIN_MENU" then
+        RecordingData.GameStates.MainMenu.Captured = true
+        RecordingData.GameStates.MainMenu.ImportantButtons = ui.Buttons
+        RecordingData.GameStates.MainMenu.KeyElements = ui.Labels
+        RecordingData.GameStates.MainMenu.ObservableChanges = observed
+        Log("[OK] Menu capturado: " .. #ui.Buttons .. " botoes interagidos")
+    elseif state == "LOBBY" then
+        RecordingData.GameStates.Lobby.Captured = true
+        RecordingData.GameStates.Lobby.MapButtons = ui.Buttons
+        RecordingData.GameStates.Lobby.ObservableChanges = observed
+        RecordingData.GameStates.Lobby.Players = {}
+        for _, player in pairs(Players:GetPlayers()) do
+            table.insert(RecordingData.GameStates.Lobby.Players, player.Name)
+        end
+        Log("[OK] Lobby capturado: " .. #ui.Buttons .. " botoes interagidos")
+    elseif state == "IN_GAME" then
+        RecordingData.GameStates.InGame.Captured = true
+        local ghost = Workspace:FindFirstChild("Ghost")
+        if ghost then
+            RecordingData.GameStates.InGame.Ghost = {
+                Name = ghost.Name,
+                Type = ghost:GetAttribute("GhostType") or "Unknown"
+            }
+        end
+        RecordingData.GameStates.InGame.ImportantItems = ui.Buttons
+        RecordingData.GameStates.InGame.ObservableChanges = observed
+        Log("[OK] Jogo capturado: " .. #ui.Buttons .. " itens interagidos")
+    end
+
+    AddToTimeline("CAPTURE", {State = state})
+end
+
+-- -----------------------------------------------------------
+-- CAPTURA DE SCRIPTS / CODIGOS (sem remotes, por varredura direta)
+-- -----------------------------------------------------------
+-- Esta rotina NAO usa remote, nao executa codigo e nao tenta bypass.
+-- Ela apenas tenta ler obj.Source diretamente via pcall quando o ambiente permite.
+-- Se Source nao vier, salva metadata da instancia e uma nota explicando o limite.
+
+local function LooksLikeLuaCode(text)
+    if type(text) ~= "string" or text == "" then return false end
+    local sample = text:sub(1, 2500)
+    local patterns = {
+        "local%s+[%w_]",
+        "function%s*[%w_%.:]*%s*%(",
+        "game:GetService%s*%(",
+        "Instance%.new%s*%(",
+        "script%.",
+        "require%s*%(",
+        "return%s+",
+        "Enum%.",
+        ":Connect%s*%(",
+        "task%.",
+    }
+    for _, pattern in ipairs(patterns) do
+        if sample:find(pattern) then
+            return true
+        end
+    end
+    return false
+end
+
+local function NormalizeWhitespacePreview(text, limit)
+    limit = limit or Config.MaxScriptPreviewChars or 900
+    if type(text) ~= "string" then return "" end
+    local cleaned = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+    if #cleaned > limit then
+        return cleaned:sub(1, limit) .. "\n...<preview_truncated>"
+    end
+    return cleaned
+end
+
+local function TruncateCapturedCode(text)
+    if type(text) ~= "string" then return "" end
+    local limit = Config.MaxCapturedCodeChars or 120000
+    if #text <= limit then return text, false end
+    return text:sub(1, limit) .. "\n...<code_truncated>", true
+end
+
+local function DetectSuspiciousCodePatterns(text)
+    local flags = {}
+    if type(text) ~= "string" or text == "" then return flags end
+    local lower = text:lower()
+
+    local checks = {
+        { key = "loadstring", pattern = "loadstring%s*%(" },
+        { key = "string_char_blob", pattern = "string%.char%s*%(" },
+        { key = "bytecode_escape", pattern = "\\x%x%x" },
+        { key = "environment_access", pattern = "getfenv%s*%(" },
+        { key = "environment_write", pattern = "setfenv%s*%(" },
+        { key = "debug_library", pattern = "debug%." },
+        { key = "hidden_string_concat", pattern = "%.%.%s*string%.char" },
+    }
+
+    for _, check in ipairs(checks) do
+        if lower:find(check.pattern) then
+            table.insert(flags, check.key)
+        end
+    end
+
+    local lineCount = 0
+    for _ in text:gmatch("\n") do lineCount = lineCount + 1 end
+    if #text > 4000 and lineCount <= 2 then
+        table.insert(flags, "very_long_single_line")
+    end
+
+    return flags
+end
+
+-- Detecta se nome/path parecem codificados ou ofuscados.
+local function AnalyzeScriptEncryption(name, path)
+    local strongEncryptionPatterns = {
+        "^[A-Za-z0-9+/]+=*$",           -- base64 puro no nome
+        "^[0-9a-f]+$",                   -- hex puro
+        "^[0-9]+$",                      -- decimal puro
+        "^[_][_%w]+$",                   -- estilo __obf__
+        "^[A-Z][a-zA-Z0-9]{20,}$",      -- nome muito longo sem separadores
+    }
+    local suspiciousPatterns = {
+        "%d%d%d%d%d%d%d%d",
+        "[_%$][_%$][_%$]",
+        "[A-Z][A-Z][A-Z][A-Z][A-Z][A-Z]",
+    }
+
+    local testName = name or ""
+    local testPath = path or ""
+
+    for _, pattern in ipairs(strongEncryptionPatterns) do
+        if testName:match(pattern) and #testName > 6 then
+            return true, "nome_suspeito"
+        end
+    end
+
+    for _, pattern in ipairs(suspiciousPatterns) do
+        if testPath:match(pattern) or testName:match(pattern) then
+            return "partial", "padrao_suspeito"
+        end
+    end
+
+    local decoded, method = TryDecryptText(testName)
+    if method ~= "plain" and decoded ~= testName then
+        return true, method
+    end
+
+    return false, "plain"
+end
+
+local function ReadDirectSource(scriptObject)
+    if not Config.EnableScriptSourceRead then
+        return false, nil, "disabled"
+    end
+
+    local ok, result = pcall(function()
+        return scriptObject.Source
+    end)
+
+    if ok and type(result) == "string" then
+        return true, result, "Source"
+    end
+
+    return false, nil, tostring(result or "Source indisponivel neste ambiente")
+end
+
+local function AnalyzeCapturedCode(rawSource)
+    local analysis = {
+        SourceReadable = false,
+        Code = nil,
+        RawCode = nil,
+        CodePreview = nil,
+        CodeLength = 0,
+        RawCodeLength = 0,
+        CodeTruncated = false,
+        DecodeMethod = "plain",
+        Encrypted = false,
+        SuspiciousFlags = {},
+        LooksLikeCode = false,
+    }
+
+    if type(rawSource) ~= "string" then
+        return analysis
+    end
+
+    analysis.SourceReadable = true
+    analysis.RawCodeLength = #rawSource
+
+    local decoded, method = TryDecryptText(rawSource)
+    local finalCode = rawSource
+
+    if method ~= "plain" and decoded and decoded ~= rawSource then
+        finalCode = decoded
+        analysis.RawCode = rawSource
+        analysis.DecodeMethod = method
+        analysis.Encrypted = true
+    end
+
+    local flags = DetectSuspiciousCodePatterns(finalCode)
+    analysis.SuspiciousFlags = flags
+    analysis.LooksLikeCode = LooksLikeLuaCode(finalCode)
+
+    if analysis.Encrypted ~= true and #flags > 0 then
+        analysis.Encrypted = "partial"
+        if analysis.DecodeMethod == "plain" then
+            analysis.DecodeMethod = "padrao_suspeito"
+        end
+    end
+
+    local limitedCode, wasTruncated = TruncateCapturedCode(finalCode)
+    analysis.Code = limitedCode
+    analysis.CodeLength = #finalCode
+    analysis.CodeTruncated = wasTruncated
+    analysis.CodePreview = NormalizeWhitespacePreview(finalCode)
+
+    return analysis
+end
+
+-- Varredura de scripts em uma raiz especifica.
+local function ScanScriptsInRoot(root, sourceName, results, seen)
+    local ok, descendants = pcall(function()
+        return root:GetDescendants()
+    end)
+    if not ok then return end
+
+    for _, obj in ipairs(descendants) do
+        if obj:IsA("LuaSourceContainer") then
+            local path = GetObjectPath(obj)
+
+            if seen[path] then continue end
+            seen[path] = true
+            if #results >= Config.MaxCapturedScripts then break end
+
+            local nameEncrypted, nameDecodeMethod = AnalyzeScriptEncryption(obj.Name, path)
+            local sourceReadable, sourceText, sourceReadStatus = ReadDirectSource(obj)
+            local codeAnalysis = AnalyzeCapturedCode(sourceText)
+
+            local encrypted = codeAnalysis.Encrypted
+            local decodeMethod = codeAnalysis.DecodeMethod
+
+            if encrypted == false and nameEncrypted ~= false then
+                encrypted = nameEncrypted
+                decodeMethod = nameDecodeMethod
+            elseif decodeMethod == "plain" and nameDecodeMethod ~= "plain" then
+                decodeMethod = nameDecodeMethod
+            end
+
+            local note
+            if sourceReadable then
+                if codeAnalysis.Code and codeAnalysis.Code ~= "" then
+                    if codeAnalysis.DecodeMethod ~= "plain" then
+                        note = "Source lido diretamente e decodificado por " .. tostring(codeAnalysis.DecodeMethod) .. "."
+                    else
+                        note = "Source lido diretamente pelo ambiente atual."
+                    end
+                else
+                    note = "Source lido, mas veio vazio."
+                end
+            else
+                note = "Script encontrado como instancia; Source nao ficou disponivel para leitura direta neste ambiente."
+            end
+
+            local entry = {
+                ID               = #results + 1,
+                Name             = obj.Name,
+                ClassName        = obj.ClassName,
+                Path             = path,
+                Source           = sourceName,
+                SourceReadable   = sourceReadable,
+                SourceReadStatus = sourceReadStatus,
+                Code             = codeAnalysis.Code,
+                RawCode          = codeAnalysis.RawCode,
+                CodePreview      = codeAnalysis.CodePreview,
+                CodeLength       = codeAnalysis.CodeLength,
+                RawCodeLength    = codeAnalysis.RawCodeLength,
+                CodeTruncated    = codeAnalysis.CodeTruncated,
+                LooksLikeCode    = codeAnalysis.LooksLikeCode,
+                SuspiciousFlags  = codeAnalysis.SuspiciousFlags,
+                Encrypted        = encrypted,
+                DecodeMethod     = decodeMethod,
+                Enabled          = (obj:IsA("Script") or obj:IsA("LocalScript")) and obj.Enabled or nil,
+                Note             = note,
+                Time             = os.date("%H:%M:%S"),
+                State            = CurrentState,
+            }
+
+            table.insert(results, entry)
+        end
+    end
+end
+
+-- Funcao principal: varre todos os locais acessiveis e retorna scripts/codigos capturados.
+ScanScripts = function()
+    local results = {}
+    local seen = {}
+
+    local roots = {
+        { obj = Workspace, name = "Workspace" },
+        { obj = LocalPlayer.PlayerGui, name = "PlayerGui" },
+        { obj = game:GetService("ReplicatedStorage"), name = "ReplicatedStorage" },
+        { obj = game:GetService("StarterGui"), name = "StarterGui" },
+        { obj = game:GetService("StarterPack"), name = "StarterPack" },
+        { obj = game:GetService("ReplicatedFirst"), name = "ReplicatedFirst" },
+    }
+
+    pcall(function()
+        local sss = game:GetService("ServerScriptService")
+        table.insert(roots, { obj = sss, name = "ServerScriptService" })
+    end)
+
+    pcall(function()
+        local sps = game:GetService("ServerStorage")
+        table.insert(roots, { obj = sps, name = "ServerStorage" })
+    end)
+
+    for _, root in ipairs(roots) do
+        ScanScriptsInRoot(root.obj, root.name, results, seen)
+    end
+
+    RecordingData.Interactions.CapturedScripts = results
+    RecordingData.Interactions.Summary.TotalScripts = #results
+
+    AddToTimeline("SCRIPT_SCAN", { Found = #results })
+    Log("[SCRIPTS] Varredura concluida: " .. #results .. " scripts/codigos encontrados.")
+
+    return results
+end
+
+-- -----------------------------------------------------------
+-- MONITORAR CLIQUES
+-- -----------------------------------------------------------
+local function MonitorClicks()
+    SafeConnect(Mouse.Button1Down, function()
+        if Config.DirectInteractionOnly then return end
+
+        local target = Mouse.Target
+        if not target then return end
+
+        TouchDirectInteraction()
+        ClickCount = ClickCount + 1
+        if #RecordingData.Interactions.Clicks >= Config.MaxClicks then
+            table.remove(RecordingData.Interactions.Clicks, 1)
+        end
+        local targetName, decodeMethod = TryDecryptText(target.Name)
+        table.insert(RecordingData.Interactions.Clicks, {
+            ID = ClickCount,
+            Type = "WORLD_TARGET",
+            Target = targetName,
+            RawTarget = target.Name,
+            DecodeMethod = decodeMethod,
+            State = CurrentState, Time = os.date("%H:%M:%S")
+        })
+        RecordingData.Interactions.Summary.UniqueTargets[targetName] = true
+        RecordingData.Interactions.Summary.TotalClicks = ClickCount
+        AddToTimeline("CLICK", {Target = targetName})
+    end)
+end
+
+-- -----------------------------------------------------------
+-- MONITORAR REMOTES
+-- -----------------------------------------------------------
+local function MonitorRemotes()
+    if not hookmetamethod or not getnamecallmethod then
+        Log("[WARN] Hook de remotes indisponivel neste executor")
+        return
+    end
+
+    local function RegisterRemoteCall(remote, method, args, argCount, shouldRecord, returnValue, hasReturn)
+        local ok, err = pcall(function()
+            if not shouldRecord then return end
+
+            RemoteCount = RemoteCount + 1
+            if #RecordingData.Interactions.RemoteCalls >= Config.MaxRemoteCalls then
+                table.remove(RecordingData.Interactions.RemoteCalls, 1)
+            end
+
+            local remoteName, decodeMethod = TryDecryptText(remote.Name)
+            local entry = {
+                ID = RemoteCount,
+                Remote = remoteName,
+                RawRemote = remote.Name,
+                DecodeMethod = decodeMethod,
+                Method = method,
+                Path = GetObjectPath(remote),
+                ArgCount = argCount,
+                Args = SerializeRemoteArgs(args, argCount),
+                RemoteTree = BuildRemoteTree(remote),
+                RemoteContext = BuildRemoteContext(remote),
+                Time = os.date("%H:%M:%S"),
+                State = CurrentState
+            }
+
+            if hasReturn then
+                entry.Return = SerializeRemoteArg(returnValue, 0)
+            end
+
+            table.insert(RecordingData.Interactions.RemoteCalls, entry)
+            RecordingData.Interactions.Summary.TotalRemotes = RemoteCount
+            AddToTimeline("REMOTE", {Name = remoteName, Method = method})
+
+            if hasReturn then
+                AddToTimelineDebounced("REMOTE_INVOKE_RETURN", {
+                    Remote = remoteName,
+                    Result = entry.Return
+                }, {GetObjectPath(remote), "return"}, Config.DebounceCooldown)
+            end
+        end)
+
+        if not ok then
+            Log("[WARN] Falha ao registrar remote: " .. tostring(err))
+        end
+    end
+
+    local ok, err = pcall(function()
+        local oldNamecall
+        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            local method = getnamecallmethod()
+
+            -- Sempre chama o original primeiro para garantir que nada é bloqueado
+            local result = table.pack(oldNamecall(self, ...))
+
+            if typeof(self) == "Instance" then
+                if self == HttpService and Config.EnableHttpHooks and (method == "GetAsync" or method == "PostAsync" or method == "RequestAsync") then
+                    local argCount = select("#", ...)
+                    local args = {...}
+                    SafeDefer(RegisterHttpCall, method, args, argCount, result[1])
+                end
+
+                local isRemoteEvent = method == "FireServer" and self:IsA("RemoteEvent")
+                local isRemoteFunction = method == "InvokeServer" and self:IsA("RemoteFunction")
+
+                if isRemoteEvent then
+                    local argCount = select("#", ...)
+                    local args = {...}
+                    local shouldRecord = not Config.DirectInteractionOnly or IsInsideDirectInteractionWindow()
+                    SafeDefer(RegisterRemoteCall, self, method, args, argCount, shouldRecord, nil, false)
+                elseif isRemoteFunction then
+                    local argCount = select("#", ...)
+                    local args = {...}
+                    local shouldRecord = not Config.DirectInteractionOnly or IsInsideDirectInteractionWindow()
+                    if Config.EnableRemoteReturnCapture then
+                        SafeDefer(RegisterRemoteCall, self, method, args, argCount, shouldRecord, result[1], true)
+                    else
+                        SafeDefer(RegisterRemoteCall, self, method, args, argCount, shouldRecord, nil, false)
+                    end
+                end
+            end
+
+            return table.unpack(result, 1, result.n)
+        end)
+    end)
+
+    if not ok then
+        Log("[WARN] Falha ao ativar hook de remotes: " .. tostring(err))
+    end
+end
+
+-- -----------------------------------------------------------
+-- EXPORTAR JSON
+-- -----------------------------------------------------------
+local function CountTableEntries(source)
+    local count = 0
+    if type(source) ~= "table" then return 0 end
+    for _ in pairs(source) do
+        count = count + 1
+    end
+    return count
+end
+
+local function BuildFilteredResults()
+    local filteredObjects = {}
+
+    for _, entry in ipairs(RecordingData.Interactions.ObservableChanges) do
+        local hasIdentifiers = CountTableEntries(entry.Identifiers) > 0
+        local hasPrompt = entry.Prompt ~= nil
+        local isUsefulObject = hasIdentifiers or hasPrompt or entry.IsNPC or entry.ScriptLike or entry.Type == "VALUE_CHANGED" or entry.Type == "ATTRIBUTE_CHANGED"
+
+        if isUsefulObject then
+            table.insert(filteredObjects, {
+                Type = entry.Type,
+                Name = entry.Name,
+                ClassName = entry.ClassName,
+                Path = entry.Path,
+                Identifiers = entry.Identifiers,
+                Attributes = entry.Attributes,
+                Tags = entry.Tags,
+                Value = entry.Value,
+                Prompt = entry.Prompt,
+                IsNPC = entry.IsNPC,
+                ScriptLike = entry.ScriptLike,
+                Note = entry.Note,
+                Time = entry.Time,
+                State = entry.State,
+            })
+        end
+    end
+
+    return {
+        DirectClicks = RecordingData.Interactions.Clicks,
+        RemoteCalls = RecordingData.Interactions.RemoteCalls,
+        HttpRequests = RecordingData.Interactions.HttpRequests,
+        WorldInteractions = RecordingData.Interactions.WorldInteractions,
+        ChatCommands = RecordingData.Interactions.ChatCommands,
+        UsefulObjects = filteredObjects,
+        CapturedScripts = RecordingData.Interactions.CapturedScripts,
+        Keys = PlayerInteractions.KeysPressed,
+        Summary = {
+            Clicks = #RecordingData.Interactions.Clicks,
+            Remotes = #RecordingData.Interactions.RemoteCalls,
+            HttpRequests = #RecordingData.Interactions.HttpRequests,
+            WorldInteractions = #RecordingData.Interactions.WorldInteractions,
+            ChatCommands = #RecordingData.Interactions.ChatCommands,
+            UsefulObjects = #filteredObjects,
+            ObservableChanges = #RecordingData.Interactions.ObservableChanges,
+            Scripts = #RecordingData.Interactions.CapturedScripts,
+        }
+    }
+end
+
+function ExportJSON()
+    RecordingData.SessionInfo.EndTime = os.time()
+    RecordingData.SessionInfo.Duration = RecordingData.SessionInfo.EndTime - RecordingData.SessionInfo.StartTime
+    RecordingData.FilteredResults = BuildFilteredResults()
+    local json = HttpService:JSONEncode(RecordingData)
+    print("\n" .. string.rep("=", 60))
+    print("EZZ HUB - JSON OTIMIZADO")
+    print(string.rep("=", 60))
+    print(json)
+    print(string.rep("=", 60))
+    print("Tamanho: " .. #json .. " caracteres")
+    return json
+end
+
+-- -----------------------------------------------------------
+-- ATUALIZAR UI
+-- -----------------------------------------------------------
+local function UpdateUI()
+    if not DebugUI then return end
+
+    -- Estado
+    local stateDisplay = CurrentState:gsub("_", " ")
+    DebugUI.stateVal.Text = stateDisplay
+
+    -- Stats
+    local uniqueTargets = 0
+    for _ in pairs(RecordingData.Interactions.Summary.UniqueTargets) do
+        uniqueTargets = uniqueTargets + 1
+    end
+    local elapsed = os.time() - RecordingData.SessionInfo.StartTime
+    local mins = math.floor(elapsed / 60)
+    local secs = elapsed % 60
+
+    DebugUI.stats.clicks.Text  = tostring(ClickCount)
+    DebugUI.stats.targets.Text = tostring(uniqueTargets)
+    DebugUI.stats.remotes.Text = tostring(RemoteCount)
+    DebugUI.stats.time.Text    = string.format("%d:%02d", mins, secs)
+
+    -- Sincroniza label do botao de scripts
+    if DebugUI.scriptsBtn and not DebugUI.scriptPanel.Visible then
+        local scriptCount = #RecordingData.Interactions.CapturedScripts
+        DebugUI.scriptsBtn.Text = "SCRIPTS (" .. tostring(scriptCount) .. ")"
+    end
+    if DebugUI.spCount then
+        DebugUI.spCount.Text = tostring(#RecordingData.Interactions.CapturedScripts) .. " scripts"
+    end
+end
+
+-- -----------------------------------------------------------
+-- INICIALIZACAO
+-- -----------------------------------------------------------
+Log("EZZ v3.1 - Iniciando...")
+
+CreateUI()
+task.wait(1)
+
+HookAllButtons()
+WatchForNewButtons()
+MonitorKeys()
+MonitorChatCommands()
+MonitorObservableChanges()
+MonitorWorldInteractives()
+MonitorPlayerContainers()
+MonitorPeriodicValueScan()
+MonitorConnectionCleanup()
+if not Config.DirectInteractionOnly then
+    MonitorClicks()
+end
+MonitorRemotes()
+
+task.spawn(function()
+    while task.wait(2) do
+        DetectGameState()
+        UpdateUI()
+    end
+end)
+
+Log("[OK] Ativo! Use os botoes para capturar e copiar.")
+
+pcall(function()
+    StarterGui:SetCore("SendNotification", {
+        Title = "EZZ HUB v3.1",
+        Text = "Interface atualizada - pronto!",
+        Duration = 4
+    })
+end)
